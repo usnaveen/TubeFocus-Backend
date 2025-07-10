@@ -1,0 +1,6 @@
+Flask==2.3.2
+google-api-python-client==2.84.0
+torch>=2.0.0
+transformers>=4.30.0
+gunicorn==20.1.0
+sentence-transformers
