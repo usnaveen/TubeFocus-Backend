@@ -1,73 +1,67 @@
-# score_model.py
+# score_model.py (Updated for Local Caching)
 
-from transformers import AutoTokenizer, AutoModel
+from sentence_transformers import SentenceTransformer, util
 import torch
 from youtube_scraper import fetch_metadata
+import os
 
-# 1) List of models to ensemble
-MODEL_NAMES = [
-    "sentence-transformers/all-MiniLM-L6-v2",
-    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
-    "sentence-transformers/paraphrase-MiniLM-L3-v2"
+# 1. Define the paths to your locally downloaded models
+# These paths must match the folder names inside your 'models' directory.
+MODEL_PATHS = [
+    "models/sentence-transformers_all-MiniLM-L6-v2",
+    "models/sentence-transformers_multi-qa-MiniLM-L6-cos-v1",
+    "models/sentence-transformers_paraphrase-MiniLM-L3-v2",
+    "models/sentence-transformers_all-mpnet-base-v2",
+    "models/sentence-transformers_all-distilroberta-v1"
 ]
 
-# 2) Load tokenizers & models just once
-tokenizers = {
-    name: AutoTokenizer.from_pretrained(name)
-    for name in MODEL_NAMES
-}  # :contentReference[oaicite:3]{index=3}
+# 2. Load all models from the local paths just once when the application starts.
+# This is much more efficient than loading them on every request.
+try:
+    print("Loading models from local directories...")
+    models = {
+        path: SentenceTransformer(path)
+        for path in MODEL_PATHS
+    }
+    print(f"Successfully loaded {len(models)} models.")
+except Exception as e:
+    print(f"FATAL: Error loading models: {e}")
+    # If models fail to load, the app cannot function.
+    models = {}
 
-models = {
-    name: AutoModel.from_pretrained(name)
-    for name in MODEL_NAMES
-}  # :contentReference[oaicite:4]{index=4}
-
-def embed(text: str, name: str) -> torch.Tensor:
-    """
-    Tokenize and mean-pool the last hidden state to get a sentence embedding.
-    """
-    tokenizer = tokenizers[name]
-    model     = models[name]
-
-    # Tokenize with truncation & padding
-    inputs = tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        padding="max_length",
-        max_length=512
-    )
-    outputs = model(**inputs)
-    last_hidden = outputs.last_hidden_state  # [1, seq_len, dim]
-
-    # Create mask to ignore padding tokens
-    mask = inputs["attention_mask"].unsqueeze(-1).expand(last_hidden.size()).float()
-    # Mean-pool: sum over tokens ÷ token count (ignores pads) :contentReference[oaicite:5]{index=5}
-    sum_vec = (last_hidden * mask).sum(1)
-    sum_mask = mask.sum(1).clamp(min=1e-9)
-    return sum_vec / sum_mask
 
 def compute_score(video_url: str, goal: str) -> int:
     """
-    Fetch title/description, compute embeddings, cosine-similarities, then average.
+    Fetches video metadata, computes embeddings using the local 5-model ensemble,
+    calculates cosine-similarities, and averages the results for a final score.
     """
-    # A) Fetch metadata
+    if not models:
+        raise RuntimeError("Models are not loaded, cannot compute score.")
+
+    # A) Fetch metadata from YouTube
     title, desc = fetch_metadata(video_url)
-    text = f"{title}\n\n{desc}"
+    text_to_embed = f"{title}\n\n{desc}"
 
     # B) Compute one score per model
     scores = []
-    for name in MODEL_NAMES:
-        vec_text = embed(text, name)
-        vec_goal = embed(goal, name)
+    for model_name, model in models.items():
+        # The sentence_transformers library handles tokenization and pooling internally.
+        vec_text = model.encode(text_to_embed, convert_to_tensor=True)
+        vec_goal = model.encode(goal, convert_to_tensor=True)
 
-        # Cosine similarity between two 1×D tensors :contentReference[oaicite:6]{index=6}
-        cos_sim = torch.nn.functional.cosine_similarity(vec_text, vec_goal, dim=1).item()  # –1..+1
+        # Calculate cosine similarity
+        cos_sim = util.cos_sim(vec_text, vec_goal).item()
 
-        # Map –1..+1 → 0..100
-        pct = int((cos_sim + 1) * 50)
-        pct = max(0, min(100, pct))
-        scores.append(pct)
+        # Map the similarity score from a range of [-1, 1] to [0, 100]
+        pct_score = int((cos_sim + 1) * 50)
+        pct_score = max(0, min(100, pct_score)) # Ensure score is within 0-100
+        scores.append(pct_score)
 
-    # C) Final score is the average
-    return int(round(sum(scores) / len(scores)))
+    # C) The final score is the average of all model scores
+    if not scores:
+        return 0
+        
+    final_score = int(round(sum(scores) / len(scores)))
+    print(f"URL: {video_url}, Goal: '{goal}', Final Score: {final_score}")
+    return final_score
+
