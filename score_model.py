@@ -30,38 +30,48 @@ except Exception as e:
     models = {}
 
 
-def compute_score(video_url: str, goal: str) -> int:
+def _calculate_score_from_text(text_to_embed: str, goal: str) -> int:
     """
-    Fetches video metadata, computes embeddings using the local 5-model ensemble,
-    calculates cosine-similarities, and averages the results for a final score.
+    Computes embeddings for the given text and goal, calculates their
+    cosine similarity, and returns a score from 0 to 100.
     """
     if not models:
         raise RuntimeError("Models are not loaded, cannot compute score.")
 
-    # A) Fetch metadata from YouTube
-    title, desc = fetch_metadata(video_url)
-    text_to_embed = f"{title}\n\n{desc}"
-
-    # B) Compute one score per model
     scores = []
     for model_name, model in models.items():
-        # The sentence_transformers library handles tokenization and pooling internally.
         vec_text = model.encode(text_to_embed, convert_to_tensor=True)
         vec_goal = model.encode(goal, convert_to_tensor=True)
-
-        # Calculate cosine similarity
         cos_sim = util.cos_sim(vec_text, vec_goal).item()
-
-        # Map the similarity score from a range of [-1, 1] to [0, 100]
-        pct_score = int((cos_sim + 1) * 50)
-        pct_score = max(0, min(100, pct_score)) # Ensure score is within 0-100
+        pct_score = max(0, min(100, int((cos_sim + 1) * 50)))
         scores.append(pct_score)
 
-    # C) The final score is the average of all model scores
     if not scores:
         return 0
-        
-    final_score = int(round(sum(scores) / len(scores)))
+    
+    return int(round(sum(scores) / len(scores)))
+
+
+def compute_score(video_url: str, goal: str) -> int:
+    """
+    Fetches video metadata (title and description) and calculates a
+    relevance score based on the provided goal.
+    """
+    title, desc = fetch_metadata(video_url)
+    text_to_embed = f"{title}\n\n{desc}"
+    final_score = _calculate_score_from_text(text_to_embed, goal)
     print(f"URL: {video_url}, Goal: '{goal}', Final Score: {final_score}")
     return final_score
+
+
+def compute_score_from_title(video_url: str, goal: str) -> int:
+    """
+    Fetches video metadata (title only) and calculates a relevance score
+    based on the provided goal.
+    """
+    title, _ = fetch_metadata(video_url)
+    final_score = _calculate_score_from_text(title, goal)
+    print(f"URL: {video_url}, Goal: '{goal}', Title-Only Score: {final_score}")
+    return final_score
+
 
