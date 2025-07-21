@@ -49,10 +49,23 @@ gcloud run deploy yt-scorer \
 After deployment, Google Cloud will provide you with a public URL for your service.
 
 4. Test the Deployed Endpoint
-You can test the live endpoint using curl.
+You can test the live endpoint using curl. The `mode` parameter is optional and defaults to `title_and_description`.
 
+To get a score based on title and description:
+```bash
 # Replace the URL with the one provided by Cloud Run
 curl -X POST \
   -H "Content-Type: application/json" \
-  -d '{"video_url":"[https://youtu.be/dQw4w9WgXcQ](https://youtu.be/dQw4w9WgXcQ)", "goal": "learn guitar"}' \
+  -d '{"video_url":"https://youtu.be/dQw4w9WgXcQ", "goal": "learn guitar"}' \
   https://yt-scorer-<hash>.us-central1.run.app/predict
+```
+
+To get a score based on title only:
+```bash
+# Replace the URL with the one provided by Cloud Run
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"video_url":"https://youtu.be/dQw4w9WgXcQ", "goal": "learn guitar", "mode": "title_only"}' \
+  https://yt-scorer-<hash>.us-central1.run.app/predict
+```
+
