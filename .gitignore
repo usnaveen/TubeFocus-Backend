@@ -16,3 +16,4 @@ __pycache__/
 # This prevents uploading gigabytes of data to your repository.
 # The models will be downloaded by anyone who runs the setup script.
 /models/
+app.log
