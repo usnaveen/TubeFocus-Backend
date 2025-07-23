@@ -1,71 +1,93 @@
-# FocusTube - Backend Scoring API
+# YouTube Productivity Score Backend
 
-This repository contains the backend service for the FocusTube project. It is a Python Flask application, containerized with Docker, that uses sentence-transformer models to provide a video relevance score.
+## Overview
+This backend provides two main services:
+- **Video Productivity Scoring**: Scores YouTube videos for relevance to a user-defined goal using sentence transformers.
+- **Witty Session Summary**: Accepts a session history and goal, and generates a witty, goal-aware summary using Vertex AI Gemini 1.5 Flash.
 
 ## Features
-- **AI-Powered Scoring:** Uses an ensemble of sentence-transformer models to analyze text.
-- **REST API:** Exposes a simple `/predict` endpoint to score videos.
-- **Containerized:** Designed to be built and deployed anywhere using Docker, currently running on Google Cloud Run.
+- `/predict` endpoint: Score a single YouTube video for relevance to a goal (supports `title_only` and `title_and_description` modes).
+- `/upload` endpoint: Accept a session's video titles and user goal, and return a witty summary using Gemini 1.5 Flash.
+- Dockerized for easy deployment (Cloud Run, GCE, or local).
 
-## Local Setup
-1.  Ensure you have Python and Docker installed.
-2.  Install dependencies: `pip install -r requirements.txt`
-3.  Download the required AI models by running the setup script: `python download_models.py`
-4.  Set the `YOUTUBE_API_KEY` environment variable.
-5.  Build the Docker image: `docker build -t focustube-backend .`
-6.  Run the container: `docker run -p 8080:8080 -e YOUTUBE_API_KEY="YOUR_API_KEY" focustube-backend`
+## Endpoints
 
-The API will now be available at `http://localhost:8080`.
+### 1. `/predict` (POST)
+- **Purpose:** Score a YouTube video for relevance to a user goal.
+- **Request:**
+  ```json
+  {
+    "video_url": "https://www.youtube.com/watch?v=...",
+    "goal": "learn about music videos",
+    "mode": "title_and_description" // or "title_only"
+  }
+  ```
+- **Response:**
+  ```json
+  { "score": 62 }
+  ```
 
-## Deployment to Google Cloud
+### 2. `/upload` (POST)
+- **Purpose:** Generate a witty, goal-aware summary of a session using Gemini 1.5 Flash.
+- **Request:**
+  ```json
+  {
+    "goal": "learn about music videos",
+    "session": [
+      {"title": "Never Gonna Give You Up"},
+      {"title": "How Music Videos Are Made"}
+    ]
+  }
+  ```
+- **Response:**
+  ```json
+  { "summary": "[Witty summary text from Gemini]" }
+  ```
 
-These commands outline the process for deploying the container to Google Cloud Run.
+## Setup & Usage
 
-### 1. Authenticate and Configure gcloud
-First, log in to your Google Cloud account and set your project ID.
-```bash
-# Log in to your Google account
-gcloud auth login
-
-# Set your active project (replace $PROJECT_ID with your actual project ID)
-gcloud config set project $PROJECT_ID
-
-2. Build and Push the Image to Google Container Registry (GCR)
-This command uses Google Cloud Build to build your Docker image and push it to GCR.
-
-gcloud builds submit --tag gcr.io/$PROJECT_ID/yt-scorer:latest
-
-3. Deploy the Image to Cloud Run
-This command deploys the image from GCR as a new service on Cloud Run.
-
-# Replace YOUR_KEY_HERE with your actual YouTube API key
-gcloud run deploy yt-scorer \
-  --image gcr.io/$PROJECT_ID/yt-scorer:latest \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars YOUTUBE_API_KEY=YOUR_KEY_HERE
-
-After deployment, Google Cloud will provide you with a public URL for your service.
-
-4. Test the Deployed Endpoint
-You can test the live endpoint using curl. The `mode` parameter is optional and defaults to `title_and_description`.
-
-To get a score based on title and description:
-```bash
-# Replace the URL with the one provided by Cloud Run
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"video_url":"https://youtu.be/dQw4w9WgXcQ", "goal": "learn guitar"}' \
-  https://yt-scorer-<hash>.us-central1.run.app/predict
+### 1. Build and Run with Docker
+```sh
+cd "YouTube Productivity Score Docker Container"
+docker build -t yt-scorer-backend:latest .
+docker run -d -p 8080:8080 --name yt-scorer-backend yt-scorer-backend:latest
 ```
 
-To get a score based on title only:
-```bash
-# Replace the URL with the one provided by Cloud Run
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"video_url":"https://youtu.be/dQw4w9WgXcQ", "goal": "learn guitar", "mode": "title_only"}' \
-  https://yt-scorer-<hash>.us-central1.run.app/predict
-```
+### 2. Vertex AI Gemini 1.5 Flash Setup
+- Enable Vertex AI API in your Google Cloud project.
+- Create a service account with Vertex AI permissions.
+- Download the JSON key and set these environment variables:
+  ```sh
+  export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/service-account-key.json
+  export GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+  ```
+- The `/upload` endpoint will now use Gemini 1.5 Flash for witty summaries.
+
+### 3. Example Usage
+- Health check:
+  ```sh
+  curl http://localhost:8080/
+  ```
+- Score a video:
+  ```sh
+  curl -X POST http://localhost:8080/predict -H 'Content-Type: application/json' \
+    -d '{"video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "goal": "learn about music videos", "mode": "title_and_description"}'
+  ```
+- Upload a session for summary:
+  ```sh
+  curl -X POST http://localhost:8080/upload -H 'Content-Type: application/json' \
+    -d '{"goal": "learn about music videos", "session": [{"title": "Never Gonna Give You Up"}, {"title": "How Music Videos Are Made"}]}'
+  ```
+
+## Development
+- Main code: `app.py`, `score_model.py`, `youtube_scraper.py`
+- Models: Downloaded to `models/` directory
+- Requirements: `requirements.txt`
+
+## Notes
+- The `/upload` endpoint requires Google Cloud credentials and access to Vertex AI Gemini 1.5 Flash.
+- The `/predict` endpoint works locally and in the cloud, and does not require Google Cloud unless you use Gemini.
+
+## License
+MIT
 
