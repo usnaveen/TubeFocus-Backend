@@ -16,4 +16,48 @@ __pycache__/
 # This prevents uploading gigabytes of data to your repository.
 # The models will be downloaded by anyone who runs the setup script.
 /models/
+
+# Logs and temporary files
+*.log
 app.log
+*.tmp
+*.temp
+
+# Testing files (can be regenerated)
+test_*.py
+test_models.py
+
+# Documentation files (not needed in production)
+*.md
+!README.md
+
+# Development and deployment files
+Dockerfile
+runtime.txt
+betaDeployment.md
+instructions.md
+Next steps.md
+
+# Model training artifacts
+*.pkl
+*.joblib
+model_versions.json
+weights.json
+
+# Feedback data (user data)
+feedback_data.csv
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary download directories
+temp_*/
+cache/

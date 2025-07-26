@@ -1,21 +1,40 @@
-# Use a specific Python version for reproducibility
-FROM python:3.10-slim
+# Use Python 3.11 slim image
+FROM python:3.11-slim
 
-# Set the working directory in the container
+# Set working directory
 WORKDIR /app
 
-# Copy the requirements file and install dependencies first
-# This leverages Docker's layer caching.
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- NEW: Copy the downloaded models into the container ---
-# This assumes you have a 'models' directory in your project root.
-COPY ./models /app/models
-
-# Copy the rest of your application code
+# Copy application code
 COPY . .
 
-# Command to run the application using gunicorn
-# Increased workers and threads for better performance on Cloud Run
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "app:app"]
+# Create a non-root user
+RUN useradd --create-home --shell /bin/bash app
+RUN chown -R app:app /app
+USER app
+
+# Expose port
+EXPOSE 8080
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV FLASK_APP=api.py
+ENV FLASK_ENV=production
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Run the application
+CMD ["python", "api.py"]

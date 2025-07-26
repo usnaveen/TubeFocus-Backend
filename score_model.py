@@ -12,7 +12,7 @@ MODEL_PATHS = [
     "models/sentence-transformers_multi-qa-MiniLM-L6-cos-v1",
     "models/sentence-transformers_paraphrase-MiniLM-L3-v2",
     "models/sentence-transformers_all-mpnet-base-v2",
-    "models/sentence-transformers_all-distilroberta-v1"
+    
 ]
 
 # 2. Load all models from the local paths just once when the application starts.
