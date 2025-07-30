@@ -6,6 +6,7 @@ from youtube_api import fetch_video_details
 from scoring_modules import score_description, score_title, score_tags, score_category
 from data_manager import save_feedback, load_feedback
 from model_trainer import train_and_save_model, load_model
+from simple_scoring import compute_simple_score, compute_simple_score_from_title, compute_simple_score_title_and_clean_desc
 import numpy as np
 
 # --- Logging setup ---
@@ -106,6 +107,40 @@ def predict():
         logger.error(f"/predict error: {e}", exc_info=True)
         return jsonify({'error': f'Internal server error: {e}'}), 500
 
+@app.route('/simpletitledesc', methods=['POST'])
+def simpletitledesc():
+    require_api_key()
+    try:
+        data = request.get_json(force=True)
+        video_url = data.get('video_url')
+        goal = data.get('goal')
+        mode = data.get('mode', 'title_and_description')  # Default to "title_and_description"
+
+        # Sanitize inputs
+        if not isinstance(video_url, str) or not video_url:
+            logger.warning('Invalid video_url in /simpletitledesc')
+            return jsonify({'error': 'Invalid video_url'}), 400
+        if not isinstance(goal, str) or not 2 < len(goal) < 200:
+            logger.warning('Invalid goal in /simpletitledesc')
+            return jsonify({'error': 'Invalid goal'}), 400
+        if mode not in ['title_only', 'title_and_description', 'title_and_clean_desc']:
+            logger.warning('Invalid mode in /simpletitledesc')
+            return jsonify({'error': 'Invalid mode. Must be "title_only", "title_and_description", or "title_and_clean_desc"'}), 400
+
+        # Compute score using simplified approach
+        if mode == "title_only":
+            score = compute_simple_score_from_title(video_url, goal)
+        elif mode == "title_and_clean_desc":
+            score = compute_simple_score_title_and_clean_desc(video_url, goal)
+        else:
+            score = compute_simple_score(video_url, goal)
+        
+        logger.info(f"/simpletitledesc {video_url} {mode} -> {score}")
+        return jsonify({"score": score, "mode": mode}), 200
+    except Exception as e:
+        logger.error(f"/simpletitledesc error: {e}", exc_info=True)
+        return jsonify({'error': f'Internal server error: {e}'}), 500
+
 @app.route('/feedback', methods=['POST'])
 def feedback():
     require_api_key()
@@ -137,4 +172,4 @@ def feedback():
         return jsonify({'error': f'Internal server error: {e}'}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True) 
+    app.run(host='0.0.0.0', port=5001, debug=True) 

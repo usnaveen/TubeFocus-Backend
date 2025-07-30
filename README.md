@@ -16,8 +16,16 @@ This backend provides advanced ML-powered services for the TubeFocus Chrome exte
 - **Multi-Modal Analysis**: Title, description, tags, and category scoring
 - **Personalized Training**: MLP regressor learns from user feedback
 
+### Simplified Scoring System
+- **5 Sentence Transformers**: Ensemble of 5 models for reliable scoring
+- **Text Cleaning**: Intelligent filtering of description noise
+- **Three Modes**: title_only, title_and_description, title_and_clean_desc
+- **Fast Processing**: Optimized for quick response times
+- **Docker-Compatible**: Same approach as production container
+
 ### API Endpoints
 - `/predict` endpoint: Score videos with `title_only` or `title_and_description` modes
+- `/simpletitledesc` endpoint: Simplified scoring with 3 modes (title_only, title_and_description, title_and_clean_desc)
 - `/upload` endpoint: Generate witty session summaries using Gemini 1.5 Flash
 - `/api/score` endpoint: Advanced scoring with multiple ML models
 - `/api/feedback` endpoint: Collect and store user feedback for model training
@@ -102,7 +110,28 @@ Generate a witty, goal-aware summary using Gemini 1.5 Flash.
 { "summary": "[Witty summary text from Gemini]" }
 ```
 
-### 3. `/api/score` (POST) - Advanced Scoring
+### 3. `/simpletitledesc` (POST) - Simplified Scoring
+Simplified scoring using 5 sentence transformers with 3 different modes.
+```json
+{
+  "video_url": "https://www.youtube.com/watch?v=...",
+  "goal": "learn about music videos",
+  "mode": "title_and_clean_desc"
+}
+```
+**Response:**
+```json
+{
+  "score": 75,
+  "mode": "title_and_clean_desc"
+}
+```
+**Available Modes:**
+- `title_only`: Uses only video title (fastest)
+- `title_and_description`: Uses title + full description (most comprehensive)
+- `title_and_clean_desc`: Uses title + cleaned description (filters noise)
+
+### 4. `/api/score` (POST) - Advanced Scoring
 Advanced scoring with multiple ML models and detailed analysis.
 ```json
 {
@@ -124,7 +153,7 @@ Advanced scoring with multiple ML models and detailed analysis.
 }
 ```
 
-### 4. `/api/feedback` (POST) - User Feedback
+### 5. `/api/feedback` (POST) - User Feedback
 Collect user feedback for model training.
 ```json
 {
@@ -161,6 +190,7 @@ Collect user feedback for model training.
 YouTube Productivity Score Development Container/
 ├── app.py                          # Main Flask application
 ├── api.py                          # Advanced API with ML models
+├── simple_scoring.py               # Simplified scoring implementation
 ├── score_model.py                  # Basic scoring implementation
 ├── scoring_modules.py              # Advanced ML scoring modules
 ├── youtube_scraper.py              # YouTube metadata fetching
@@ -185,6 +215,18 @@ curl -X POST http://localhost:8080/predict \
     "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "goal": "learn about music videos",
     "mode": "title_and_description"
+  }'
+```
+
+### Simplified Video Scoring
+```bash
+curl -X POST http://localhost:8080/simpletitledesc \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-KEY: your_api_key' \
+  -d '{
+    "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "goal": "learn about music videos",
+    "mode": "title_and_clean_desc"
   }'
 ```
 
