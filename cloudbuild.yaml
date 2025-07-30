@@ -1,0 +1,47 @@
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest',
+      '.'
+    ]
+
+  # Push the Docker image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA'
+    ]
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest'
+    ]
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args: [
+      'run',
+      'deploy',
+      'tubefocus-backend',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA',
+      '--region', 'us-central1',
+      '--platform', 'managed',
+      '--allow-unauthenticated',
+      '--port', '8080',
+      '--memory', '2Gi',
+      '--cpu', '2',
+      '--max-instances', '10',
+      '--set-env-vars', 'YOUTUBE_API_KEY=${_YOUTUBE_API_KEY},API_KEY=${_API_KEY}'
+    ]
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest'
+
+substitutions:
+  _YOUTUBE_API_KEY: 'your_youtube_api_key_here'
+  _API_KEY: 'your_api_key_here' 

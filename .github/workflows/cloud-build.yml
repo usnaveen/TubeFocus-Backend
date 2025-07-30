@@ -1,0 +1,45 @@
+name: Build and Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PROJECT_ID: youtubeextension-464822
+  REGION: us-central1
+  REPOSITORY: tubefocus-backend
+  SERVICE_NAME: tubefocus-backend
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Authorize Docker push
+      run: gcloud auth configure-docker
+
+    - name: Build and Push Container
+      run: |
+        gcloud builds submit \
+          --config cloudbuild.yaml \
+          --substitutions=_YOUTUBE_API_KEY="${{ secrets.YOUTUBE_API_KEY }}",_API_KEY="${{ secrets.API_KEY }}" \
+          .
+
+    - name: Show Output
+      run: |
+        echo "Build completed successfully!"
+        echo "Service URL: https://tubefocus-backend-$(gcloud config get-value project).run.app" 
