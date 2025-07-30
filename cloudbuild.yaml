@@ -26,13 +26,13 @@ steps:
     args: [
       'run',
       'deploy',
-      'tubefocus-backend',
+      'yt-scorer-api',
       '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest',
       '--region', 'us-central1',
       '--platform', 'managed',
       '--allow-unauthenticated',
       '--port', '8080',
-      '--memory', '2Gi',
+      '--memory', '4Gi',
       '--cpu', '2',
       '--max-instances', '10',
       '--set-env-vars', 'YOUTUBE_API_KEY=${_YOUTUBE_API_KEY},API_KEY=${_API_KEY}'

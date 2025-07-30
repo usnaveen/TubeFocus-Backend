@@ -10,7 +10,7 @@ env:
   PROJECT_ID: youtubeextension-464822
   REGION: us-central1
   REPOSITORY: tubefocus-backend
-  SERVICE_NAME: tubefocus-backend
+  SERVICE_NAME: yt-scorer-api
 
 jobs:
   build-and-deploy:
