@@ -39,17 +39,17 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Documentation
-README.md
-*.md
+# Documentation (keep README for Docker context)
+# README.md
+# *.md
 
 # Test files
 test_*.py
 *_test.py
 
-# Development files
+# Development files (keep cloudbuild.yaml for build context)
 .github/
-cloudbuild.yaml
+# cloudbuild.yaml
 build_*.sh
 deploy_*.sh
 
