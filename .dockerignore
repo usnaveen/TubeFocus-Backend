@@ -53,8 +53,8 @@ test_*.py
 build_*.sh
 deploy_*.sh
 
-# Model files (will be downloaded at runtime)
-models/
+# Model files (keep models for local loading)
+# models/
 
 # Logs
 *.log

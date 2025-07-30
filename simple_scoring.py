@@ -80,21 +80,21 @@ def extract_meaningful_content(description: str) -> str:
     logger.info(f"Extracted {len(meaningful_sentences)} meaningful sentences from description")
     return " ".join(meaningful_sentences)
 
-# Define the paths to the 5 sentence transformer models
-SIMPLE_MODEL_PATHS = [
-    "models/sentence-transformers_all-MiniLM-L6-v2",
-    "models/sentence-transformers_multi-qa-MiniLM-L6-cos-v1",
-    "models/sentence-transformers_paraphrase-MiniLM-L3-v2",
-    "models/sentence-transformers_all-mpnet-base-v2",
-    "models/sentence-transformers_all-distilroberta-v1"
+# Define the model names for the 5 sentence transformer models
+SIMPLE_MODEL_NAMES = [
+    "sentence-transformers/all-MiniLM-L6-v2",
+    "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+    "sentence-transformers/paraphrase-MiniLM-L3-v2",
+    "sentence-transformers/all-mpnet-base-v2",
+    "sentence-transformers/all-distilroberta-v1"
 ]
 
-# Load all models from the local paths just once when the application starts
+# Load all models from Hugging Face just once when the application starts
 try:
-    print("Loading simple scoring models from local directories...")
+    print("Loading simple scoring models from Hugging Face...")
     simple_models = {
-        path: SentenceTransformer(path)
-        for path in SIMPLE_MODEL_PATHS
+        name: SentenceTransformer(name)
+        for name in SIMPLE_MODEL_NAMES
     }
     print(f"Successfully loaded {len(simple_models)} simple scoring models.")
 except Exception as e:
