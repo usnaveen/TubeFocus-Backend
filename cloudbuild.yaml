@@ -3,8 +3,8 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
-      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA',
       '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$SHORT_SHA',
       '.'
     ]
 
@@ -12,13 +12,13 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA'
+      'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest'
     ]
 
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
-      'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest'
+      'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$SHORT_SHA'
     ]
 
   # Deploy to Cloud Run
@@ -27,7 +27,7 @@ steps:
       'run',
       'deploy',
       'tubefocus-backend',
-      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest',
       '--region', 'us-central1',
       '--platform', 'managed',
       '--allow-unauthenticated',
@@ -39,8 +39,8 @@ steps:
     ]
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$COMMIT_SHA'
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$SHORT_SHA'
 
 substitutions:
   _YOUTUBE_API_KEY: 'your_youtube_api_key_here'
