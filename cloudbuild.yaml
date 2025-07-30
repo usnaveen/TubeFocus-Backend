@@ -4,7 +4,6 @@ steps:
     args: [
       'build',
       '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest',
-      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$SHORT_SHA',
       '.'
     ]
 
@@ -13,12 +12,6 @@ steps:
     args: [
       'push',
       'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest'
-    ]
-
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'push',
-      'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$SHORT_SHA'
     ]
 
   # Deploy to Cloud Run
@@ -40,7 +33,6 @@ steps:
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:latest'
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/tubefocus-backend/tubefocus-backend:$SHORT_SHA'
 
 substitutions:
   _YOUTUBE_API_KEY: 'your_youtube_api_key_here'
