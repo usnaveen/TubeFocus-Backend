@@ -18,6 +18,7 @@ CORS(app, origins=["chrome-extension://*"], methods=["GET", "POST"], allow_heade
 
 MIN_FEEDBACK = 5
 API_KEY = os.environ.get('API_KEY', 'changeme')
+YOUTUBE_API_KEY = "your_youtube_api_key_here"
 
 # --- Security: API Key check ---
 def require_api_key():
@@ -34,8 +35,8 @@ def log_request_info():
 def health():
     return 'YouTube Relevance Scorer API is running!', 200
 
-@app.route('/predict', methods=['POST'])
-def predict():
+@app.route('/score/detailed', methods=['POST'])
+def score_detailed():
     require_api_key()
     try:
         data = request.get_json(force=True)
@@ -107,8 +108,8 @@ def predict():
         logger.error(f"/predict error: {e}", exc_info=True)
         return jsonify({'error': f'Internal server error: {e}'}), 500
 
-@app.route('/simpletitledesc', methods=['POST'])
-def simpletitledesc():
+@app.route('/score/simple', methods=['POST'])
+def score_simple():
     require_api_key()
     try:
         data = request.get_json(force=True)
@@ -172,4 +173,5 @@ def feedback():
         return jsonify({'error': f'Internal server error: {e}'}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True) 
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False) 

@@ -4,7 +4,6 @@
 This backend provides advanced ML-powered services for the TubeFocus Chrome extension:
 - **Advanced Video Productivity Scoring**: Uses ensemble of sentence transformers and zero-shot classification models for highly accurate relevance scoring.
 - **Multi-Modal Analysis**: Analyzes video titles, descriptions, tags, and categories for comprehensive scoring.
-- **Witty Session Summary**: Generates witty, goal-aware summaries using Vertex AI Gemini 1.5 Flash.
 - **Model Training**: Includes MLP regressor for personalized scoring based on user feedback.
 
 ## Features
@@ -24,11 +23,10 @@ This backend provides advanced ML-powered services for the TubeFocus Chrome exte
 - **Docker-Compatible**: Same approach as production container
 
 ### API Endpoints
-- `/predict` endpoint: Score videos with `title_only` or `title_and_description` modes
-- `/simpletitledesc` endpoint: Simplified scoring with 3 modes (title_only, title_and_description, title_and_clean_desc)
-- `/upload` endpoint: Generate witty session summaries using Gemini 1.5 Flash
-- `/api/score` endpoint: Advanced scoring with multiple ML models
-- `/api/feedback` endpoint: Collect and store user feedback for model training
+- `/score/detailed` endpoint: Advanced scoring with multiple ML models and detailed analysis.
+- `/score/simple` endpoint: Simplified scoring with 3 modes (title_only, title_and_description, title_and_clean_desc)
+- `/feedback` endpoint: Collect and store user feedback for model training.
+- `/health` endpoint: Health check for the API.
 
 ## ML Models Used
 
@@ -65,56 +63,41 @@ This will download all required models to the `models/` directory:
 ```bash
 export YOUTUBE_API_KEY="your_youtube_api_key"
 export API_KEY="your_secret_api_key"
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
-export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
 ```
 
 ### 4. Run the Development Server
-```bash
-python app.py
-```
-Or for production:
 ```bash
 python api.py
 ```
 
 ## API Endpoints
 
-### 1. `/predict` (POST) - Basic Scoring
-Score a YouTube video for relevance to a user goal.
+### 1. `/score/detailed` (POST) - Detailed Scoring
+Advanced scoring with multiple ML models and detailed analysis.
 ```json
 {
-  "video_url": "https://www.youtube.com/watch?v=...",
+  "video_id": "dQw4w9WgXcQ",
   "goal": "learn about music videos",
-  "mode": "title_and_description"
+  "parameters": ["title", "description", "tags", "category"]
 }
 ```
 **Response:**
 ```json
-{ "score": 62 }
-```
-
-### 2. `/upload` (POST) - Session Summary
-Generate a witty, goal-aware summary using Gemini 1.5 Flash.
-```json
 {
-  "goal": "learn about music videos",
-  "session": [
-    {"title": "Never Gonna Give You Up"},
-    {"title": "How Music Videos Are Made"}
-  ]
+  "title_score": 0.85,
+  "description_score": 0.72,
+  "tags_score": 0.65,
+  "category_score": 0.90,
+  "category_name": "Education",
+  "score": 0.78
 }
 ```
-**Response:**
-```json
-{ "summary": "[Witty summary text from Gemini]" }
-```
 
-### 3. `/simpletitledesc` (POST) - Simplified Scoring
+### 2. `/score/simple` (POST) - Simplified Scoring
 Simplified scoring using 5 sentence transformers with 3 different modes.
 ```json
 {
-  "video_url": "https://www.youtube.com/watch?v=...",
+  "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "goal": "learn about music videos",
   "mode": "title_and_clean_desc"
 }
@@ -131,38 +114,28 @@ Simplified scoring using 5 sentence transformers with 3 different modes.
 - `title_and_description`: Uses title + full description (most comprehensive)
 - `title_and_clean_desc`: Uses title + cleaned description (filters noise)
 
-### 4. `/api/score` (POST) - Advanced Scoring
-Advanced scoring with multiple ML models and detailed analysis.
+### 3. `/feedback` (POST) - User Feedback
+Collect user feedback for model training.
 ```json
 {
-  "video_url": "https://www.youtube.com/watch?v=...",
-  "goal": "learn about music videos"
+  "desc_score": 0.72,
+  "title_score": 0.85,
+  "tags_score": 0.65,
+  "category_score": 0.90,
+  "user_score": 4.5
 }
 ```
 **Response:**
 ```json
 {
-  "final_score": 75,
-  "breakdown": {
-    "title_score": 80,
-    "description_score": 70,
-    "tags_score": 65,
-    "category_score": 85
-  },
-  "confidence": 0.92
+  "status": "Feedback saved",
+  "retrained": true
 }
 ```
 
-### 5. `/api/feedback` (POST) - User Feedback
-Collect user feedback for model training.
-```json
-{
-  "video_url": "https://www.youtube.com/watch?v=...",
-  "goal": "learn about music videos",
-  "predicted_score": 75,
-  "user_score": 80
-}
-```
+### 4. `/health` (GET) - Health Check
+Checks if the API is running.
+**Response:** `YouTube Relevance Scorer API is running!`
 
 ## Development Tools
 
@@ -188,10 +161,8 @@ Collect user feedback for model training.
 ## File Structure
 ```
 YouTube Productivity Score Development Container/
-├── app.py                          # Main Flask application
-├── api.py                          # Advanced API with ML models
+├── api.py                          # Main Flask application with all endpoints
 ├── simple_scoring.py               # Simplified scoring implementation
-├── score_model.py                  # Basic scoring implementation
 ├── scoring_modules.py              # Advanced ML scoring modules
 ├── youtube_scraper.py              # YouTube metadata fetching
 ├── youtube_api.py                  # YouTube API integration
@@ -207,49 +178,27 @@ YouTube Productivity Score Development Container/
 
 ## Usage Examples
 
-### Basic Video Scoring
+### Detailed Video Scoring
 ```bash
-curl -X POST http://localhost:8080/predict \
+curl -X POST http://localhost:8080/score/detailed \
   -H 'Content-Type: application/json' \
+  -H 'X-API-KEY: your_api_key' \
   -d '{
-    "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "video_id": "dQw4w9WgXcQ",
     "goal": "learn about music videos",
-    "mode": "title_and_description"
+    "parameters": ["title", "description"]
   }'
 ```
 
 ### Simplified Video Scoring
 ```bash
-curl -X POST http://localhost:8080/simpletitledesc \
+curl -X POST http://localhost:8080/score/simple \
   -H 'Content-Type: application/json' \
   -H 'X-API-KEY: your_api_key' \
   -d '{
     "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "goal": "learn about music videos",
     "mode": "title_and_clean_desc"
-  }'
-```
-
-### Advanced Scoring with Breakdown
-```bash
-curl -X POST http://localhost:8080/api/score \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "goal": "learn about music videos"
-  }'
-```
-
-### Session Summary Generation
-```bash
-curl -X POST http://localhost:8080/upload \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "goal": "learn about music videos",
-    "session": [
-      {"title": "Never Gonna Give You Up"},
-      {"title": "How Music Videos Are Made"}
-    ]
   }'
 ```
 
@@ -283,12 +232,7 @@ python download_all_models.py
 Run multiple times if network issues occur.
 
 ### Memory Issues
-For low-memory environments, reduce the number of models in `score_model.py`:
-```python
-MODEL_PATHS = [
-    "models/sentence-transformers_all-MiniLM-L6-v2",  # Keep only essential models
-]
-```
+For low-memory environments, reduce the number of models in `simple_scoring.py`.
 
 ### API Key Issues
 Ensure environment variables are set:
