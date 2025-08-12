@@ -30,11 +30,11 @@ EXPOSE 8080
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV FLASK_APP=api.py
-ENV FLASK_ENV=production
+ENV YOUTUBE_API_KEY=your_youtube_api_key_here
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
 # Run the application
-CMD ["python", "api.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "api:app"]

@@ -5,9 +5,9 @@ from sentence_transformers import SentenceTransformer, CrossEncoder, util
 from transformers import pipeline
 
 # --- Model paths (local) ---
-EMBEDDING_MODEL_PATH = "models/sentence-transformers_all-MiniLM-L6-v2"
-CROSS_ENCODER_PATH = "models/sentence-transformers_cross-encoder-ms-marco-MiniLM-L6-v2/models--cross-encoder--ms-marco-MiniLM-L6-v2/snapshots/ce0834f22110de6d9222af7a7a03628121708969"
-ZERO_SHOT_MODEL_PATH = "models/facebook_bart-large-mnli/models--facebook--bart-large-mnli/snapshots/d7645e127eaf1aefc7862fd59a17a5aa8558b8ce"
+EMBEDDING_MODEL_PATH = "sentence-transformers/all-MiniLM-L6-v2"
+CROSS_ENCODER_PATH = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+ZERO_SHOT_MODEL_PATH = "facebook/bart-large-mnli"
 
 # --- Load models from local paths ---
 embedding_model = SentenceTransformer(EMBEDDING_MODEL_PATH)
