@@ -8,7 +8,7 @@ from flask_cors import CORS
 from youtube_client import get_video_details
 from scoring_modules import score_description, score_title, score_tags, score_category
 from data_manager import save_feedback, load_feedback
-from model_trainer import train_and_save_model, load_model
+
 from simple_scoring import compute_simple_score, compute_simple_score_from_title, compute_simple_score_title_and_clean_desc
 import numpy as np
 
@@ -54,6 +54,9 @@ class APIError(Exception):
         self.message = message
         self.http_status = http_status
         self.details = details or {}
+
+from dotenv import load_dotenv
+load_dotenv()
 
 def create_error_response(error_code, message, http_status=400, details=None):
     """Create standardized error response"""
@@ -128,16 +131,16 @@ def health():
         # Check YouTube API key
         youtube_api_status = "configured" if os.environ.get('YOUTUBE_API_KEY') else "missing"
         
-        # Check if models are loaded (for simple scoring)
-        simple_models_status = "loaded" if os.path.exists("models/sentence-transformers_all-MiniLM-L6-v2") else "not_loaded"
+        # Check if Google API key is configured
+        google_api_status = "configured" if os.environ.get('GOOGLE_API_KEY') else "missing"
         
         return jsonify({
             'status': 'healthy',
-            'service': 'YouTube Relevance Scorer API',
+            'service': 'YouTube Relevance Scorer API (Gemini Powered)',
             'timestamp': __import__('datetime').datetime.now().isoformat(),
             'system_info': {
                 'youtube_api_key': youtube_api_status,
-                'simple_scoring_models': simple_models_status,
+                'google_api_key': google_api_status,
                 'python_version': __import__('sys').version
             }
         })
@@ -494,18 +497,10 @@ def feedback():
         )
         
         # Check if retraining is needed
-        feedback_data = load_feedback()
+        # feedback_data = load_feedback()
+        # retrained = False
+        # Retraining disabled for API-only mode
         retrained = False
-        if len(feedback_data) >= MIN_FEEDBACK:
-            try:
-                X = np.array([[float(row['desc_score']), float(row['title_score']), float(row['tags_score']), float(row['category_score'])] for row in feedback_data])
-                y = np.array([float(row['user_score']) for row in feedback_data])
-                train_and_save_model(X, y)
-                retrained = True
-                logger.info('Model retrained after feedback.')
-            except Exception as training_error:
-                logger.error(f"Model retraining failed: {training_error}")
-                # Don't fail the feedback request if retraining fails
         
         logger.info('Feedback saved successfully.')
         return jsonify({
@@ -558,6 +553,7 @@ def method_not_allowed(error):
         405,
         {'method': request.method, 'endpoint': request.path, 'allowed_methods': ['GET', 'POST']}
     )
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
