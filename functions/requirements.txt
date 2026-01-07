@@ -1,4 +1,3 @@
-firebase-functions
-firebase-admin
+functions-framework==3.*
 google-generativeai
 requests
