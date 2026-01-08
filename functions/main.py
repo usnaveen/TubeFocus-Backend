@@ -89,6 +89,9 @@ def simple_score(request):
             details = {"title": "Unknown Video", "desc": "No description"}
         
         result = score_gemini(details['title'], details['desc'], data.get('goal', 'General'))
+        # Merge metadata into response so frontend doesn't need its own API Key
+        result['title'] = details['title']
+        result['description'] = details['desc']
         return (json.dumps(result), 200, headers)
 
     except Exception as e:
