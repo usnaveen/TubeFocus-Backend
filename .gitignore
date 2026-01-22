@@ -1,91 +1,77 @@
-# Python virtual environment
-venv/
-.venv/
-env/
-
-# ===== CRITICAL: Environment Variables & Secrets =====
-# Never commit API keys or sensitive configuration!
+# ===== Environment & Secrets =====
 .env
 .env.local
 .env.*.local
 .env.production
 .env.staging
-
-# Secret files
 **/secrets/
 **/*secret*.json
 **/*credentials*.json
 **/*-key.json
 service-account*.json
 
-# API key backups (just in case)
-**/*apikey*
-**/*api-key*
-
-# Byte-compiled / optimized files
+# ===== Python =====
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# macOS system files
-.DS_Store
-
-# --- CRITICAL: Ignore the downloaded models ---
-# This prevents uploading gigabytes of data to your repository.
-# The models will be downloaded by anyone who runs the setup script.
+# ===== Data & Models =====
 /models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+model_versions.json
+weights.json
+feedback_data.csv
+chroma_data/
 
-# Logs and temporary files
+# ===== Logs =====
 *.log
 app.log
 server.log
-*.tmp
-*.temp
 redis_logs/
 
-# Testing files and debug scripts
-test_*.py
-test_models.py
-debug_*.py
-verify_*.py
-toy_*.py
-api_optimized.py
-test_client.html
+# ===== OS Files =====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
 
-# Documentation files (not needed in production)
-*.md
-!README.md
-
-# Development and deployment files
-Dockerfile
-runtime.txt
-betaDeployment.md
-instructions.md
-Next steps.md
-
-# Model training artifacts
-*.pkl
-*.joblib
-model_versions.json
-weights.json
-
-# Feedback data (user data)
-feedback_data.csv
-
-# IDE and editor files
+# ===== IDE =====
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS generated files
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Temporary download directories
+# ===== Temporary =====
+*.tmp
+*.temp
 temp_*/
 cache/
 
-# Project History Document
-PROJECT_EVOLUTION.md
+# ===== Build & Deploy =====
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ===== Testing (keep in scripts/ folder) =====
+# Don't ignore scripts/ folder itself, just root-level test files
+/test_*.py
+/debug_*.py
+/verify_*.py
