@@ -2,11 +2,8 @@ import os
 import re
 import json
 import requests
-import redis
-from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD, REDIS_USERNAME, CACHE_TTL_SECONDS
-
-
-YT_API_KEY = os.environ.get('YOUTUBE_API_KEY')
+# import redis
+from config import Config, REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD, REDIS_USERNAME, CACHE_TTL_SECONDS
 
 YOUTUBE_VIDEO_URL = 'https://www.googleapis.com/youtube/v3/videos'
 YOUTUBE_CATEGORY_URL = 'https://www.googleapis.com/youtube/v3/videoCategories'
@@ -14,22 +11,23 @@ YOUTUBE_CATEGORY_URL = 'https://www.googleapis.com/youtube/v3/videoCategories'
 redis_client = None # Initialize to None
 
 def initialize_redis_client():
-    global redis_client
-    if redis_client is not None: # Already initialized
-        return redis_client
-    try:
-        client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, username=REDIS_USERNAME, password=REDIS_PASSWORD, ssl=False, decode_responses=True)
-        client.ping()
-        print("Successfully connected to Redis.")
-        redis_client = client
-        return client
-    except redis.exceptions.ConnectionError as e:
-        print(f"Could not connect to Redis: {e}")
-        redis_client = None
-        return None
+    return None
+    # global redis_client
+    # if redis_client is not None: # Already initialized
+    #     return redis_client
+    # try:
+    #     client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, username=REDIS_USERNAME, password=REDIS_PASSWORD, ssl=False, decode_responses=True)
+    #     client.ping()
+    #     print("Successfully connected to Redis.")
+    #     redis_client = client
+    #     return client
+    # except redis.exceptions.ConnectionError as e:
+    #     print(f"Could not connect to Redis: {e}")
+    #     redis_client = None
+    #     return None
 
 # Initialize Redis client when the module is imported
-initialize_redis_client()
+# initialize_redis_client()
 
 def extract_video_id(url_or_id: str) -> str:
     """
@@ -60,7 +58,7 @@ def get_video_details(video_url_or_id: str):
     params = {
         'part': 'snippet',
         'id': video_id,
-        'key': YT_API_KEY
+        'key': Config.YOUTUBE_API_KEY
     }
     resp = requests.get(YOUTUBE_VIDEO_URL, params=params)
     data = resp.json()
@@ -97,7 +95,7 @@ def get_category_name(category_id: str):
     params = {
         'part': 'snippet',
         'id': category_id,
-        'key': YT_API_KEY
+        'key': Config.YOUTUBE_API_KEY
     }
     resp = requests.get(YOUTUBE_CATEGORY_URL, params=params)
     data = resp.json()

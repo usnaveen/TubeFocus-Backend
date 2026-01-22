@@ -2,7 +2,25 @@
 venv/
 .venv/
 env/
+
+# ===== CRITICAL: Environment Variables & Secrets =====
+# Never commit API keys or sensitive configuration!
 .env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+
+# Secret files
+**/secrets/
+**/*secret*.json
+**/*credentials*.json
+**/*-key.json
+service-account*.json
+
+# API key backups (just in case)
+**/*apikey*
+**/*api-key*
 
 # Byte-compiled / optimized files
 __pycache__/
@@ -20,12 +38,19 @@ __pycache__/
 # Logs and temporary files
 *.log
 app.log
+server.log
 *.tmp
 *.temp
+redis_logs/
 
-# Testing files (can be regenerated)
+# Testing files and debug scripts
 test_*.py
 test_models.py
+debug_*.py
+verify_*.py
+toy_*.py
+api_optimized.py
+test_client.html
 
 # Documentation files (not needed in production)
 *.md
@@ -61,3 +86,6 @@ Desktop.ini
 # Temporary download directories
 temp_*/
 cache/
+
+# Project History Document
+PROJECT_EVOLUTION.md

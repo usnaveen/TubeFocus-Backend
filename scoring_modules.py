@@ -1,25 +1,28 @@
-import google.generativeai as genai
+from google import genai
 import logging
 import json
 import os
+from config import Config
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Re-use the key from environment
-GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
+# Configure Gemini API
+# if Config.GOOGLE_API_KEY:
+#    genai.configure(api_key=Config.GOOGLE_API_KEY)
 
 def _get_genai_score(prompt):
-    if not GOOGLE_API_KEY:
+    if not Config.GOOGLE_API_KEY:
         logger.error("Missing GOOGLE_API_KEY")
         return 0.0
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=Config.GOOGLE_API_KEY)
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=prompt
+        )
         text = response.text.strip()
         if text.startswith('```json'): # Cleanup
             text = text.replace('```json', '').replace('```', '')

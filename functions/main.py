@@ -8,6 +8,9 @@ import re
 
 logger = logging.getLogger()
 
+# Note: For Cloud Functions, environment variables are loaded directly from function configuration
+# We don't use the config.py module here to keep the function self-contained
+
 # --- HELPER: CORS HEADERS ---
 def get_cors_headers(origin):
     return {

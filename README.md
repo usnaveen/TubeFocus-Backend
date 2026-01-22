@@ -50,25 +50,34 @@ This backend provides advanced ML-powered services for the TubeFocus Chrome exte
 pip install -r requirements.txt
 ```
 
-### 2. Download ML Models
-```bash
-python download_all_models.py
-```
-This will download all required models to the `models/` directory:
-- Sentence transformers for embedding generation
-- BART-large-MNLI for zero-shot classification
-- Cross-encoder for re-ranking
+### 2. Configure Environment Variables
 
-### 3. Set Environment Variables
+**IMPORTANT:** This project now uses Gemini API instead of local ML models.
+
+Create a `.env` file from the template:
 ```bash
-export YOUTUBE_API_KEY="your_youtube_api_key"
-export API_KEY="your_secret_api_key"
+cp .env.example .env
 ```
 
-### 4. Run the Development Server
+Edit `.env` and add your API keys:
+```bash
+# Required API Keys
+YOUTUBE_API_KEY=your_youtube_api_key_here
+GOOGLE_API_KEY=your_google_gemini_api_key_here
+API_KEY=your_secure_api_key_here
+```
+
+**Where to get API keys:**
+- **YouTube Data API v3**: [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+- **Google Gemini API**: [Google AI Studio](https://makersuite.google.com/app/apikey)
+- **API_KEY**: Create your own secure key for protecting your endpoints
+
+### 3. Run the Development Server
 ```bash
 python api.py
 ```
+
+The server will start on `http://localhost:8080` by default.
 
 ## API Endpoints
 
@@ -204,42 +213,55 @@ curl -X POST http://localhost:8080/score/simple \
 
 ## Development Notes
 
-### Model Performance
-- **Ensemble Approach**: Multiple models provide more robust scoring
-- **Local Execution**: All ML models run locally for privacy
-- **Caching**: Models are loaded once and cached in memory
-- **Fallback**: Graceful degradation if some models fail to load
+### Architecture (Updated Jan 2026)
+- **Gemini API**: Uses Google's Gemini 2.0 Flash for video scoring and reasoning
+- **Lightweight**: No local ML models to download or manage
+- **Scalable**: API-based scoring with cloud infrastructure
+- **Smart Caching**: Redis caching for repeated video lookups
 
-### Training and Feedback
-- **User Feedback**: Collects user ratings to improve scoring
-- **MLP Regressor**: Trains on feedback data for personalized scoring
-- **Model Versioning**: Tracks model versions and performance
-- **Automatic Retraining**: Retrains when sufficient feedback is collected
+### Configuration Management
+- **Centralized Config**: All settings in `config.py`
+- **Environment Variables**: Secure API key management via `.env` files
+- **Multiple Environments**: Support for development, staging, and production
+- **Validation**: Automatic configuration validation on startup
 
 ### Privacy and Security
-- **Local Processing**: ML models run locally, no data sent to external services
-- **API Key Protection**: Secure API key validation
-- **Data Deletion**: Session data deleted after summary generation
+- **API Key Protection**: Keys stored in environment variables, never in code
+- **Secure Endpoints**: API key authentication for all endpoints
 - **No Persistent Storage**: User data not stored permanently
+- **Data Deletion**: Session data deleted after processing
 
 ## Troubleshooting
 
-### Model Download Issues
-If models fail to download:
+### Configuration Errors
+If you get "Configuration errors" on startup:
 ```bash
-python download_all_models.py
-```
-Run multiple times if network issues occur.
+# Check if .env file exists
+ls -la .env
 
-### Memory Issues
-For low-memory environments, reduce the number of models in `simple_scoring.py`.
+# Verify environment variables are loaded
+python -c "from config import Config; print(Config.get_info())"
+```
 
 ### API Key Issues
-Ensure environment variables are set:
+1. Verify API keys are set in `.env` file
+2. Check keys are valid in respective cloud consoles
+3. Test API connectivity:
 ```bash
-echo $YOUTUBE_API_KEY
-echo $API_KEY
+curl -X GET http://localhost:8080/health
 ```
+
+### Import Errors
+If you get import errors, ensure all dependencies are installed:
+```bash
+pip install -r requirements.txt --upgrade
+```
+
+### Redis Connection Issues
+Redis is optional. If Redis fails to connect:
+- The app will continue working without caching
+- Check Redis credentials in `.env` file
+- Or disable Redis by commenting out Redis config
 
 ## License
 MIT
