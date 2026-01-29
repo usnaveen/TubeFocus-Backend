@@ -952,6 +952,226 @@ def librarian_stats():
             {'error_details': str(e)}
         )
 
+
+# ===== FIRESTORE ENDPOINTS: Persistent Storage =====
+
+@app.route('/highlights', methods=['POST'])
+def save_highlight():
+    """
+    Save a highlight to Firestore.
+    POST /highlights
+    """
+    require_api_key()
+    try:
+        from firestore_service import save_highlight as fs_save_highlight
+        
+        data = request.get_json()
+        if not data:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "Request body is required",
+                400
+            )
+        
+        # Validate required fields
+        if not data.get('video_id') or data.get('timestamp') is None:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "video_id and timestamp are required",
+                400
+            )
+        
+        doc_id = fs_save_highlight(data)
+        
+        if doc_id:
+            return jsonify({
+                'success': True,
+                'highlight_id': doc_id,
+                'message': 'Highlight saved successfully'
+            }), 201
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Highlight saved locally only (Firestore not available)'
+            }), 200
+        
+    except Exception as e:
+        logger.error(f"/highlights POST error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to save highlight",
+            500,
+            {'error_details': str(e)}
+        )
+
+
+@app.route('/highlights', methods=['GET'])
+def get_highlights():
+    """
+    Get all highlights.
+    GET /highlights
+    Query params:
+      - user_id: optional user ID filter
+      - limit: max results (default 100)
+    """
+    require_api_key()
+    try:
+        from firestore_service import get_highlights as fs_get_highlights
+        
+        user_id = request.args.get('user_id')
+        limit = int(request.args.get('limit', 100))
+        
+        highlights = fs_get_highlights(user_id=user_id, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'highlights': highlights,
+            'count': len(highlights)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"/highlights GET error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to retrieve highlights",
+            500,
+            {'error_details': str(e)}
+        )
+
+
+@app.route('/highlights/video/<video_id>', methods=['GET'])
+def get_video_highlights(video_id):
+    """
+    Get all highlights for a specific video.
+    GET /highlights/video/<video_id>
+    """
+    require_api_key()
+    try:
+        from firestore_service import get_highlights_for_video
+        
+        highlights = get_highlights_for_video(video_id)
+        
+        return jsonify({
+            'success': True,
+            'video_id': video_id,
+            'highlights': highlights,
+            'count': len(highlights)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"/highlights/video error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to retrieve video highlights",
+            500,
+            {'error_details': str(e)}
+        )
+
+
+@app.route('/highlights/<highlight_id>', methods=['DELETE'])
+def delete_highlight(highlight_id):
+    """
+    Delete a highlight.
+    DELETE /highlights/<highlight_id>
+    """
+    require_api_key()
+    try:
+        from firestore_service import delete_highlight as fs_delete_highlight
+        
+        success = fs_delete_highlight(highlight_id)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Highlight deleted'
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Highlight not found or deletion failed'
+            }), 404
+        
+    except Exception as e:
+        logger.error(f"/highlights DELETE error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to delete highlight",
+            500,
+            {'error_details': str(e)}
+        )
+
+
+@app.route('/backup/chromadb', methods=['POST'])
+def backup_chromadb():
+    """
+    Backup ChromaDB to Google Cloud Storage.
+    POST /backup/chromadb
+    """
+    require_api_key()
+    try:
+        from firestore_service import backup_chromadb_to_gcs
+        
+        success = backup_chromadb_to_gcs()
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'ChromaDB backup completed'
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Backup failed (check logs for details)'
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"/backup/chromadb error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to backup ChromaDB",
+            500,
+            {'error_details': str(e)}
+        )
+
+
+@app.route('/restore/chromadb', methods=['POST'])
+def restore_chromadb():
+    """
+    Restore ChromaDB from Google Cloud Storage.
+    POST /restore/chromadb
+    """
+    require_api_key()
+    try:
+        from firestore_service import restore_chromadb_from_gcs
+        
+        success = restore_chromadb_from_gcs()
+        
+        if success:
+            # Reinitialize librarian to pick up restored data
+            from librarian_agent import LibrarianAgent
+            global _librarian_instance
+            _librarian_instance = LibrarianAgent()
+            
+            return jsonify({
+                'success': True,
+                'message': 'ChromaDB restored successfully'
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Restore failed (no backup found or error occurred)'
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"/restore/chromadb error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to restore ChromaDB",
+            500,
+            {'error_details': str(e)}
+        )
+
+
 # Global error handler for unhandled exceptions
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
