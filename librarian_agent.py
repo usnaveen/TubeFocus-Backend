@@ -3,10 +3,18 @@ from chromadb.config import Settings
 import logging
 import os
 from datetime import datetime
+import google.generativeai as genai
+from config import Config
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Setup Gemini
+if Config.GOOGLE_API_KEY:
+    genai.configure(api_key=Config.GOOGLE_API_KEY)
+else:
+    logger.warning("GOOGLE_API_KEY not found. Librarian Chat will not function.")
 
 class LibrarianAgent:
     """
@@ -277,24 +285,95 @@ class LibrarianAgent:
             logger.error(f"Failed to delete video {video_id}: {str(e)}")
             return False
     
-    def _chunk_transcript(self, transcript, chunk_size=500):
-        """Split transcript into overlapping chunks."""
-        if not transcript:
-            return []
-        
-        words = transcript.split()
-        chunks = []
-        
-        # Create overlapping chunks
-        overlap = 50  # words
-        chunk_words = chunk_size // 5  # Approximate words per chunk
-        
-        for i in range(0, len(words), chunk_words - overlap):
-            chunk = ' '.join(words[i:i + chunk_words])
-            if len(chunk) > 50:  # Minimum chunk size
-                chunks.append(chunk)
-        
         return chunks
+        
+    def get_all_highlights(self):
+        """
+        Retrieve all stored highlights (marked with type='highlight' metadata).
+        """
+        if not self.collection: return []
+        
+        try:
+            # Query based on metadata filter
+            results = self.collection.get(
+                where={"type": "highlight"}
+            )
+            
+            highlights = []
+            if results and results['ids']:
+                for i in range(len(results['ids'])):
+                    meta = results['metadatas'][i]
+                    # Format for frontend
+                    highlights.append({
+                        'id': results['ids'][i],
+                        'video_id': meta.get('original_video_id') or meta.get('video_id'),
+                        'text': results['documents'][i],
+                        'note': meta.get('note', ''),
+                        'timestamp': meta.get('timestamp', 0),
+                        'video_url': meta.get('video_url', ''),
+                        'created_at': meta.get('indexed_at', '')
+                    })
+                    
+            # Sort by creation date (newest first)
+            highlights.sort(key=lambda x: x['created_at'], reverse=True)
+            return highlights
+            
+        except Exception as e:
+            logger.error(f"Failed to get highlights: {str(e)}")
+            return []
+
+    def chat(self, query):
+        """
+        RAG Chat: Answer query using library context.
+        """
+        if not Config.GOOGLE_API_KEY:
+            return {"answer": "I can't chat right now because the Google API Key is missing.", "sources": []}
+            
+        # 1. Retrieve Context
+        search_res = self.search_history(query, n_results=5)
+        context_docs = search_res.get('results', [])
+        
+        if not context_docs:
+            return {"answer": "I couldn't find any relevant information in your library.", "sources": []}
+            
+        # Format context for prompt
+        context_str = ""
+        sources = []
+        for i, doc in enumerate(context_docs):
+            context_str += f"Source {i+1} (Video: {doc['title']}):\n{doc['snippet']}\n\n"
+            sources.append({
+                "title": doc['title'],
+                "video_id": doc['video_id'],
+                "score": doc['relevance']
+            })
+            
+        # 2. Generate Answer
+        prompt = f"""You are the TubeFocus Librarian, a helpful assistant with access to the user's video library.
+        
+        User Query: {query}
+        
+        Use the following information retrieved from the user's library to answer the query. 
+        If the answer is not in the context, say you don't know based on their library.
+        Keep the answer concise and helpful.
+        
+        Context:
+        {context_str}
+        
+        Answer:"""
+        
+        try:
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            response = model.generate_content(prompt)
+            return {
+                "answer": response.text,
+                "sources": sources
+            }
+        except Exception as e:
+            logger.error(f"Chat generation failed: {e}")
+            return {
+                "answer": "Sorry, I encountered an error generating the response.",
+                "sources": sources # Return sources even if generation fails
+            }
 
 # Global instance (singleton pattern for agent)
 _librarian_instance = None

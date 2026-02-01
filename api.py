@@ -952,6 +952,69 @@ def librarian_stats():
             {'error_details': str(e)}
         )
 
+@app.route('/librarian/chat', methods=['POST'])
+def librarian_chat():
+    """
+    Librarian Agent endpoint - RAG Chat.
+    POST /librarian/chat
+    Body: { "query": "..." }
+    """
+    require_api_key()
+    try:
+        data = request.get_json(force=True)
+        query = data.get('query')
+        
+        if not query:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "query is required",
+                400,
+                {'missing_field': 'query'}
+            )
+            
+        librarian = get_librarian_agent()
+        response = librarian.chat(query)
+        
+        return jsonify({
+            'success': True,
+            'response': response
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"/librarian/chat error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Librarian chat failed",
+            500,
+            {'error_details': str(e)}
+        )
+
+@app.route('/librarian/get_highlights', methods=['GET'])
+def librarian_get_highlights():
+    """
+    Get all highlights stored in the Librarian.
+    GET /librarian/get_highlights
+    """
+    require_api_key()
+    try:
+        librarian = get_librarian_agent()
+        highlights = librarian.get_all_highlights()
+        
+        return jsonify({
+            'success': True,
+            'highlights': highlights
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"/librarian/get_highlights error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to retrieve highlights",
+            500,
+            {'error_details': str(e)}
+        )
+
+
 
 # ===== FIRESTORE ENDPOINTS: Persistent Storage =====
 
