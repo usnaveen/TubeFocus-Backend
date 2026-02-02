@@ -2,32 +2,10 @@ import os
 import re
 import json
 import requests
-# import redis
-from config import Config, REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD, REDIS_USERNAME, CACHE_TTL_SECONDS
+from config import Config
 
 YOUTUBE_VIDEO_URL = 'https://www.googleapis.com/youtube/v3/videos'
 YOUTUBE_CATEGORY_URL = 'https://www.googleapis.com/youtube/v3/videoCategories'
-
-redis_client = None # Initialize to None
-
-def initialize_redis_client():
-    return None
-    # global redis_client
-    # if redis_client is not None: # Already initialized
-    #     return redis_client
-    # try:
-    #     client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, username=REDIS_USERNAME, password=REDIS_PASSWORD, ssl=False, decode_responses=True)
-    #     client.ping()
-    #     print("Successfully connected to Redis.")
-    #     redis_client = client
-    #     return client
-    # except redis.exceptions.ConnectionError as e:
-    #     print(f"Could not connect to Redis: {e}")
-    #     redis_client = None
-    #     return None
-
-# Initialize Redis client when the module is imported
-# initialize_redis_client()
 
 def extract_video_id(url_or_id: str) -> str:
     """
@@ -45,16 +23,9 @@ def extract_video_id(url_or_id: str) -> str:
 
 def get_video_details(video_url_or_id: str):
     video_id = extract_video_id(video_url_or_id)
-    cache_key = f"youtube:video_details:{video_id}"
-
-    # Check cache first
-    if redis_client:
-        cached_data = redis_client.get(cache_key)
-        if cached_data:
-            print(f"Cache hit for video details {video_id}")
-            return json.loads(cached_data)
-
-    print(f"Cache miss for video details {video_id}, fetching from API.")
+    
+    # Direct API fetch - No caching (Redis removed)
+    print(f"Fetching video details from API for {video_id}")
     params = {
         'part': 'snippet',
         'id': video_id,
@@ -74,24 +45,11 @@ def get_video_details(video_url_or_id: str):
         'category': category_name
     }
 
-    # Store in cache
-    if redis_client:
-        data_to_cache = json.dumps(details)
-        redis_client.setex(cache_key, CACHE_TTL_SECONDS, data_to_cache)
-
     return details
 
 def get_category_name(category_id: str):
-    cache_key = f"youtube:category_name:{category_id}"
-
-    # Check cache first
-    if redis_client:
-        cached_data = redis_client.get(cache_key)
-        if cached_data:
-            print(f"Cache hit for category {category_id}")
-            return json.loads(cached_data)
-
-    print(f"Cache miss for category {category_id}, fetching from API.")
+    # Direct API fetch - No caching (Redis removed)
+    print(f"Fetching category name from API for {category_id}")
     params = {
         'part': 'snippet',
         'id': category_id,
@@ -102,10 +60,5 @@ def get_category_name(category_id: str):
     if not data.get('items') or not data['items'][0]:
         return ''
     category_name = data['items'][0]['snippet']['title']
-
-    # Store in cache
-    if redis_client:
-        data_to_cache = json.dumps(category_name)
-        redis_client.setex(cache_key, CACHE_TTL_SECONDS, data_to_cache)
 
     return category_name

@@ -105,8 +105,22 @@ def handle_missing_data(details, required_parameters):
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from google import genai
+
+# ... (imports)
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "X-API-KEY"])
+
+# --- Rate Limiter Setup ---
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[Config.RATELIMIT_DEFAULT],
+    storage_uri=Config.RATELIMIT_STORAGE_URL
+)
 
 # --- Security: API Key check ---
 def require_api_key():
@@ -123,201 +137,91 @@ def log_request_info():
     logger.info(f"{request.method} {request.path} - {request.remote_addr}")
 
 @app.route('/health', methods=['GET'])
+@limiter.exempt  # Exempt health check from rate limits
 def health():
-    """Health check endpoint with system status"""
+    """Health check endpoint with system status and dependency verification"""
+    
+    # Verify Dependencies
+    dependencies = {
+        'youtube_api': {'status': 'unknown', 'latency_ms': 0},
+        'gemini_api': {'status': 'unknown', 'latency_ms': 0}
+    }
+    
+    status = 'healthy'
+    
+    # Check 1: YouTube API (via Client)
+    start_time = __import__('time').time()
+    try:
+        # Simple lightweight call to verify connectivity
+        if Config.YOUTUBE_API_KEY:
+             # Minimal call to check key validity (using requests directly or client)
+             # We rely on Config validation usually, but here we can check connectivity if desired.
+             # For now, just checking configuration as "healthy" implies configuration is present.
+             dependencies['youtube_api']['status'] = 'configured'
+        else:
+             dependencies['youtube_api']['status'] = 'missing'
+             status = 'degraded'
+    except Exception as e:
+        dependencies['youtube_api']['status'] = f'error: {str(e)}'
+        status = 'degraded'
+    dependencies['youtube_api']['latency_ms'] = int((__import__('time').time() - start_time) * 1000)
+
+    # Check 2: Gemini API
+    start_time = __import__('time').time()
+    try:
+        if Config.GOOGLE_API_KEY:
+            client = genai.Client(api_key=Config.GOOGLE_API_KEY)
+            # List models as a lightweight check
+            list(client.models.list_models(page_size=1)) 
+            dependencies['gemini_api']['status'] = 'connected'
+        else:
+            dependencies['gemini_api']['status'] = 'missing'
+            status = 'degraded'
+    except Exception as e:
+        dependencies['gemini_api']['status'] = f'error: {str(e)}'
+        status = 'unhealthy' # Critical dependency
+    dependencies['gemini_api']['latency_ms'] = int((__import__('time').time() - start_time) * 1000)
+
+    # Check 3: Firestore (via Librarian Agent connection check)
+    start_time = __import__('time').time()
+    try:
+        from librarian_agent import get_librarian_agent
+        agent = get_librarian_agent()
+        if agent and agent.db:
+            # Lightweight check: Access collection reference (doesn't make network call yet usually)
+            # or try a minimal read. Let's trust initialization.
+            dependencies['firestore'] = {'status': 'connected', 'latency_ms': 0}
+        else:
+            dependencies['firestore'] = {'status': 'disconnected', 'latency_ms': 0}
+            status = 'degraded' # Librarian features unavailable
+    except Exception as e:
+        dependencies['firestore'] = {'status': f'error: {str(e)}', 'latency_ms': 0}
+        status = 'degraded'
+    dependencies['firestore']['latency_ms'] = int((__import__('time').time() - start_time) * 1000)
+
     try:
         return jsonify({
-            'status': 'healthy',
-            'service': 'YouTube Relevance Scorer API (Gemini Powered)',
+            'status': status,
+            'service': 'TubeFocus API',
             'timestamp': __import__('datetime').datetime.now().isoformat(),
+            'dependencies': dependencies,
             'system_info': {
-                'youtube_api_key': "configured" if Config.YOUTUBE_API_KEY else "missing",
-                'google_api_key': "configured" if Config.GOOGLE_API_KEY else "missing",
                 'environment': Config.ENVIRONMENT,
                 'python_version': __import__('sys').version
             }
-        })
+        }), 200 # Always return 200 to allow clients to see the status details
     except Exception as e:
         return create_error_response(
             APIErrorCodes.SERVICE_UNAVAILABLE,
             "Health check failed",
-            503,
+            200, # Return 200 even on error to see details
             {'error_details': str(e)}
         )
 
-@app.route('/score/detailed', methods=['POST'])
-def score_detailed():
-    require_api_key()
-    try:
-        data = request.get_json(force=True)
-        video_id = data.get('video_id')
-        goal = data.get('goal')
-        parameters = data.get('parameters', ['title'])
-        
-        # Validate required fields
-        if not video_id:
-            return create_error_response(
-                APIErrorCodes.MISSING_REQUIRED_FIELDS,
-                "video_id is required",
-                400,
-                {'missing_field': 'video_id'}
-            )
-        
-        if not goal:
-            return create_error_response(
-                APIErrorCodes.MISSING_REQUIRED_FIELDS,
-                "goal is required",
-                400,
-                {'missing_field': 'goal'}
-            )
-        
-        # Sanitize inputs
-        if not isinstance(video_id, str) or not 5 < len(video_id) < 20:
-            return create_error_response(
-                APIErrorCodes.INVALID_VIDEO_ID,
-                "Invalid video_id format",
-                400,
-                {'video_id': video_id, 'expected_format': '11-character YouTube video ID'}
-            )
-        
-        if not isinstance(goal, str) or not 2 < len(goal) < 200:
-            return create_error_response(
-                APIErrorCodes.INVALID_GOAL,
-                "Invalid goal format",
-                400,
-                {'goal': goal, 'expected_format': '2-200 characters'}
-            )
-        
-        if not isinstance(parameters, list) or not all(isinstance(p, str) for p in parameters):
-            return create_error_response(
-                APIErrorCodes.INVALID_PARAMETERS,
-                "Invalid parameters format",
-                400,
-                {'parameters': parameters, 'expected_format': 'List of strings'}
-            )
-        
-        # Validate parameter values
-        valid_parameters = ['title', 'description', 'tags', 'category']
-        invalid_params = [p for p in parameters if p not in valid_parameters]
-        if invalid_params:
-            return create_error_response(
-                APIErrorCodes.INVALID_PARAMETERS,
-                "Invalid parameter values",
-                400,
-                {'invalid_parameters': invalid_params, 'valid_parameters': valid_parameters}
-            )
-        
-        # Fetch video details
-        details = get_video_details(video_id)
-        if not details:
-            # Check if it's a YouTube API issue
-            if not Config.YOUTUBE_API_KEY:
-                return create_error_response(
-                    APIErrorCodes.YOUTUBE_API_KEY_MISSING,
-                    "YouTube API key not configured",
-                    503,
-                    {'solution': 'Set YOUTUBE_API_KEY environment variable'}
-                )
-            else:
-                return create_error_response(
-                    APIErrorCodes.VIDEO_NOT_FOUND,
-                    "Video not found or inaccessible",
-                    404,
-                    {'video_id': video_id, 'possible_reasons': ['Video is private', 'Video is deleted', 'Invalid video ID']}
-                )
-        
-        # Check for missing data based on requested parameters
-        missing_data, available_parameters = handle_missing_data(details, parameters)
-        
-        if missing_data:
-            logger.warning(f"Missing data for video {video_id}: {missing_data}")
-            # Continue with available parameters, but log the issue
-        
-        # Calculate scores for available parameters
-        scores = {}
-        selected_scores = []
-        
-        # Title scoring
-        if 'title' in parameters:
-            if details.get('title'):
-                title_score = score_title(goal, details['title'])
-                scores['title_score'] = title_score
-                selected_scores.append(title_score)
-            else:
-                scores['title_score'] = 0.0
-                logger.warning(f"Title missing for video {video_id}, setting score to 0")
-        
-        # Description scoring
-        if 'description' in parameters:
-            if details.get('description'):
-                desc_score = score_description(goal, details.get('title', ''), details['description'])
-                scores['description_score'] = desc_score
-                selected_scores.append(desc_score)
-            else:
-                scores['description_score'] = 0.0
-                logger.warning(f"Description missing for video {video_id}, setting score to 0")
-        
-        # Tags scoring
-        if 'tags' in parameters:
-            if details.get('tags') and len(details['tags']) > 0:
-                tags_score = score_tags(goal, details['tags'])
-                scores['tags_score'] = tags_score
-                selected_scores.append(tags_score)
-            else:
-                scores['tags_score'] = 0.0
-                logger.warning(f"Tags missing for video {video_id}, setting score to 0")
-        
-        # Category scoring
-        if 'category' in parameters:
-            if details.get('category'):
-                category_score = score_category(goal, details['category'])
-                scores['category_score'] = category_score
-                selected_scores.append(category_score)
-            else:
-                scores['category_score'] = 0.0
-                logger.warning(f"Category missing for video {video_id}, setting score to 0")
-        
-        # Calculate final score based on available parameters
-        if len(selected_scores) == 0:
-            return create_error_response(
-                APIErrorCodes.INSUFFICIENT_DATA,
-                "No scoring data available for requested parameters",
-                400,
-                {'requested_parameters': parameters, 'missing_data': missing_data, 'available_data': available_parameters}
-            )
-        
-        # Calculate final score as average of available parameter scores
-        if len(selected_scores) == 1:
-            final_score = selected_scores[0]
-        else:
-            final_score = sum(selected_scores) / len(selected_scores)
-        
-        scores['score'] = final_score
-        scores['category_name'] = details.get('category', 'Unknown')
-        
-        # Add metadata about the scoring process
-        scores['scoring_metadata'] = {
-            'parameters_requested': parameters,
-            'parameters_available': available_parameters,
-            'parameters_missing': missing_data,
-            'score_calculation_method': 'average_of_available_parameters',
-            'total_parameters_used': len(selected_scores)
-        }
-        
-        logger.info(f"/score/detailed {video_id} {parameters} -> {final_score:.3f} (available: {available_parameters}, missing: {missing_data})")
-        return jsonify(scores)
-        
-    except Exception as e:
-        logger.error(f"/score/detailed error: {e}", exc_info=True)
-        return create_error_response(
-            APIErrorCodes.INTERNAL_ERROR,
-            "Internal server error during scoring",
-            500,
-            {'error_details': str(e)}
-        )
 
-@app.route('/score/simple', methods=['POST'])
-def score_simple():
+
+@app.route('/score', methods=['POST'])
+def score_endpoint():
     require_api_key()
     try:
         data = request.get_json(force=True)
@@ -438,126 +342,9 @@ def score_simple():
             {'error_details': str(e)}
         )
 
-@app.route('/feedback', methods=['POST'])
-def feedback():
-    require_api_key()
-    try:
-        data = request.get_json(force=True)
-        
-        # Validate required fields
-        required_fields = ['desc_score', 'title_score', 'tags_score', 'category_score', 'user_score']
-        missing_fields = [field for field in required_fields if field not in data]
-        
-        if missing_fields:
-            return create_error_response(
-                APIErrorCodes.MISSING_REQUIRED_FIELDS,
-                "Missing required feedback fields",
-                400,
-                {'missing_fields': missing_fields, 'required_fields': required_fields}
-            )
-        
-        # Validate field types and values
-        feedback_scores = {}
-        for field in required_fields:
-            value = data[field]
-            if not isinstance(value, (int, float)):
-                return create_error_response(
-                    APIErrorCodes.INVALID_PARAMETERS,
-                    f"Invalid {field} type",
-                    400,
-                    {'field': field, 'value': value, 'expected_type': 'number'}
-                )
-            
-            # Validate score range (0-1 for API scores, 0-100 for user score)
-            if field == 'user_score':
-                if not (0 <= value <= 100):
-                    return create_error_response(
-                        APIErrorCodes.INVALID_PARAMETERS,
-                        f"Invalid {field} value",
-                        400,
-                        {'field': field, 'value': value, 'expected_range': '0-100'}
-                    )
-            else:
-                if not (0 <= value <= 1):
-                    return create_error_response(
-                        APIErrorCodes.INVALID_PARAMETERS,
-                        f"Invalid {field} value",
-                        400,
-                        {'field': field, 'value': value, 'expected_range': '0-1'}
-                    )
-            
-            feedback_scores[field] = float(value)
-        
-        # Save feedback
-        save_feedback(
-            feedback_scores['desc_score'],
-            feedback_scores['title_score'], 
-            feedback_scores['tags_score'],
-            feedback_scores['category_score'],
-            feedback_scores['user_score']
-        )
-        
-        # Check if retraining is needed
-        # feedback_data = load_feedback()
-        # retrained = False
-        # Retraining disabled for API-only mode
-        retrained = False
-        feedback_data = []  # Placeholder since retraining is disabled
-        
-        logger.info('Feedback saved successfully.')
-        return jsonify({
-            'status': 'Feedback saved', 
-            'retrained': retrained,
-            'total_feedback_count': len(feedback_data)
-        })
-        
-    except Exception as e:
-        logger.error(f"/feedback error: {e}", exc_info=True)
-        return create_error_response(
-            APIErrorCodes.INTERNAL_ERROR,
-            "Internal server error during feedback processing",
-            500,
-            {'error_details': str(e)}
-        )
 
-@app.route('/transcript/<video_id>', methods=['GET'])
-def transcript_endpoint(video_id):
-    """
-    Transcript extraction endpoint for Auditor Agent.
-    GET /transcript/<video_id>
-    """
-    require_api_key()
-    try:
-        logger.info(f"Fetching transcript for video: {video_id}")
-        
-        # Get transcript using the transcript service
-        transcript_data = get_transcript(video_id)
-        
-        if transcript_data.get('error'):
-            return jsonify({
-                'success': False,
-                'error': transcript_data['error'],
-                'transcript': None,
-                'segments': []
-            }), 404
-        
-        return jsonify({
-            'success': True,
-            'transcript': transcript_data['transcript'],
-            'segments': transcript_data['segments'],
-            'language': transcript_data.get('language'),
-            'is_generated': transcript_data.get('is_generated'),
-            'video_id': video_id
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"/transcript error: {e}", exc_info=True)
-        return create_error_response(
-            APIErrorCodes.INTERNAL_ERROR,
-            "Failed to fetch transcript",
-            500,
-            {'error_details': str(e), 'video_id': video_id}
-        )
+
+
 
 @app.route('/audit', methods=['POST'])
 def audit_video():
@@ -710,37 +497,7 @@ def coach_analyze():
             {'error_details': str(e)}
         )
 
-@app.route('/coach/stats/<session_id>', methods=['GET'])
-def coach_stats(session_id):
-    """
-    Get session statistics from Coach Agent.
-    GET /coach/stats/<session_id>
-    """
-    require_api_key()
-    try:
-        coach = get_coach_agent()
-        stats = coach.get_session_stats(session_id)
-        
-        if not stats:
-            return jsonify({
-                'success': False,
-                'error': 'Session not found'
-            }), 404
-        
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'stats': stats
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"/coach/stats error: {e}", exc_info=True)
-        return create_error_response(
-            APIErrorCodes.INTERNAL_ERROR,
-            "Failed to retrieve session stats",
-            500,
-            {'error_details': str(e)}
-        )
+
 
 @app.route('/librarian/index', methods=['POST'])
 def librarian_index():

@@ -23,14 +23,19 @@ class Config:
     # ===== Environment =====
     ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
     DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
+
+    # ===== Rate Limiting =====
+    RATELIMIT_DEFAULT = os.environ.get('RATELIMIT_DEFAULT', '200 per day;50 per hour')
+    RATELIMIT_STORAGE_URL = os.environ.get('RATELIMIT_STORAGE_URL', 'memory://')
     
-    # ===== Redis Configuration =====
-    REDIS_HOST = os.environ.get('REDIS_HOST', 'redis-12918.c212.ap-south-1-1.ec2.redns.redis-cloud.com')
-    REDIS_PORT = int(os.environ.get('REDIS_PORT', '12918'))
-    REDIS_DB = int(os.environ.get('REDIS_DB', '0'))
-    REDIS_PASSWORD = os.environ.get('REDIS_PASSWORD', 'eps749EJLcCgzpJnkbfTxShVnQhjenpe')
-    REDIS_USERNAME = os.environ.get('REDIS_USERNAME', 'default')
-    CACHE_TTL_SECONDS = int(os.environ.get('CACHE_TTL_SECONDS', str(60 * 60 * 24)))  # 24 hours
+    # ===== Redis Configuration - Removed (Not needed) =====
+    # Redis integration removed in favor of simplified architecture
+    REDIS_HOST = None
+    REDIS_PORT = None
+    REDIS_DB = None
+    REDIS_PASSWORD = None
+    REDIS_USERNAME = None
+    CACHE_TTL_SECONDS = 0
     
     # ===== Model Weights =====
     DEFAULT_WEIGHTS = {
