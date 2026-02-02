@@ -1,14 +1,15 @@
 Flask==2.3.2
 flask-cors==4.0.0
 google-api-python-client==2.84.0
-torch>=2.0.0
 gunicorn==20.1.0
-sentence-transformers>=2.2.0
-google-cloud-aiplatform>=1.38.0
-google-auth>=2.0.0
-transformers>=4.30.0
-scikit-learn>=1.3.0
-joblib>=1.3.0
-numpy>=1.24.0
+google-genai
+python-dotenv>=1.0.0
+numpy>=1.24.0,<2.0
 requests>=2.31.0
-nltk>=3.8.0
+redis==4.3.4
+youtube-transcript-api>=0.6.0
+# chromadb removed
+google-cloud-firestore>=2.17.2
+firebase-admin>=6.0.0
+google-cloud-storage>=2.10.0
+Flask-Limiter>=3.3.0

@@ -1,0 +1,422 @@
+# Backend - Cursor AI Rules
+
+## Technology Stack
+- **Framework**: Flask (Python 3.11+)
+- **AI/LLM**: OpenAI API (GPT-4, embeddings)
+- **Caching**: Redis (if available)
+- **Deployment**: Google Cloud Run
+- **External APIs**: YouTube Data API v3
+
+## Python Code Style
+
+### Type Hints & Documentation
+```python
+from typing import Dict, List, Optional, Tuple, Union
+
+def score_video(video_id: str, user_context: Optional[Dict] = None) -> Dict[str, float]:
+    """
+    Score a YouTube video for productivity relevance.
+    
+    Args:
+        video_id: YouTube video identifier
+        user_context: Optional user preferences and history
+        
+    Returns:
+        Dict containing scores for various dimensions
+        
+    Raises:
+        ValueError: If video_id is invalid
+        APIError: If external API calls fail
+    """
+    pass
+```
+
+### Error Handling
+- Always use try-except for external API calls
+- Log errors with appropriate severity levels
+- Return meaningful error messages to clients
+- Never expose internal errors to users
+```python
+try:
+    result = external_api_call()
+except APIError as e:
+    logger.error(f"API call failed: {e}")
+    return {"error": "Service temporarily unavailable"}, 503
+```
+
+### Async Operations
+- Use async/await for I/O-bound operations
+- Batch API calls when possible
+- Implement timeouts for all external calls
+- Use connection pooling
+
+### Configuration Management
+- All config in `config.py`
+- Use environment variables via `os.getenv()`
+- Provide sensible defaults
+- Document all config options
+
+## Agent Architecture
+
+### Coach Agent (`coach_agent.py`)
+- Provides personalized recommendations
+- Analyzes user viewing patterns
+- Suggests productivity improvements
+- Should use LangChain MCP for complex chains
+
+### Auditor Agent (`auditor_agent.py`)
+- Validates content quality
+- Checks for misinformation signals
+- Scores educational value
+- Use Context7 MCP for fact-checking
+
+### Librarian Agent (`librarian_agent.py`)
+- Organizes and categorizes content
+- Manages user's video library
+- Provides search and discovery
+- Use embeddings for semantic search
+
+## API Design Principles
+
+### Endpoint Structure
+```python
+@app.route('/api/v1/score', methods=['POST'])
+def score_endpoint():
+    """Keep endpoints RESTful and versioned."""
+    pass
+```
+
+### Request Validation
+```python
+from flask import request, jsonify
+
+def validate_request(required_fields: List[str]) -> Optional[Dict]:
+    """Validate incoming request has required fields."""
+    data = request.get_json()
+    if not data:
+        return {"error": "Invalid JSON"}, 400
+    
+    missing = [f for f in required_fields if f not in data]
+    if missing:
+        return {"error": f"Missing fields: {missing}"}, 400
+    
+    return None
+```
+
+### Response Format
+```python
+# Success response
+{
+    "status": "success",
+    "data": {...},
+    "timestamp": "2026-01-22T..."
+}
+
+# Error response
+{
+    "status": "error",
+    "error": "Description",
+    "code": "ERROR_CODE",
+    "timestamp": "2026-01-22T..."
+}
+```
+
+## External API Integration
+
+### YouTube Data API
+- Use `youtube_client.py` for all YouTube interactions
+- Cache responses when possible
+- Respect API quotas
+- Handle rate limiting gracefully
+- Use Google MCP for complex queries
+
+### OpenAI API
+- Use `config.py` for API key management
+- Implement retry logic with exponential backoff
+- Log token usage for cost monitoring
+- Use LangChain MCP for chain operations
+- Stream responses when appropriate
+
+## Performance Optimization
+
+### Caching Strategy
+```python
+# Cache expensive operations
+@cache.memoize(timeout=3600)
+def get_video_metadata(video_id: str) -> Dict:
+    """Cache metadata for 1 hour."""
+    pass
+```
+
+### Database Queries
+- Use connection pooling
+- Index frequently queried fields
+- Avoid N+1 queries
+- Batch operations when possible
+
+### Scoring Optimization
+- Pre-compute when possible
+- Use lightweight models for real-time scoring
+- Heavy analysis in background jobs
+- Monitor latency in `scripts/latency_test.py`
+
+## Testing Guidelines
+
+### Unit Tests
+```python
+# Use pytest
+def test_score_calculation():
+    """Test score calculation logic."""
+    result = calculate_score(mock_data)
+    assert 0 <= result <= 100
+    assert isinstance(result, float)
+```
+
+### Integration Tests
+- Test actual API endpoints
+- Use test fixtures in `scripts/`
+- Mock external services
+- Test error scenarios
+
+### Test Scripts Location
+- All test scripts in `scripts/` directory
+- Name pattern: `test_*.py` or `verify_*.py`
+- Include debug scripts: `debug_*.py`
+
+## Deployment Considerations
+
+### Environment Variables Required
+```bash
+OPENAI_API_KEY=sk-...
+YOUTUBE_API_KEY=...
+REDIS_URL=redis://...
+FLASK_ENV=production
+LOG_LEVEL=INFO
+```
+
+### Docker Best Practices
+- Multi-stage builds for smaller images
+- Use `.dockerignore` to exclude unnecessary files
+- Health check endpoints
+- Graceful shutdown handling
+
+### Cloud Run Specifics
+- Max request timeout: 60s
+- Cold start optimization
+- Use Cloud Build for CI/CD
+- Configure auto-scaling appropriately
+
+## Logging & Monitoring
+
+### Logging Standards
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Use appropriate levels
+logger.debug("Detailed debug info")
+logger.info("General information")
+logger.warning("Warning message")
+logger.error("Error occurred", exc_info=True)
+logger.critical("Critical failure")
+```
+
+### Metrics to Track
+- API response times
+- Token usage (OpenAI)
+- Cache hit rates
+- Error rates by endpoint
+- YouTube API quota usage
+
+## Dependencies Management
+
+### requirements.txt
+- Pin major versions: `flask>=3.0.0,<4.0.0`
+- Regular security updates
+- Document why each dependency exists
+- Keep it minimal
+
+### Adding New Dependencies
+1. Check if functionality already exists
+2. Evaluate package maintenance status
+3. Consider bundle size impact
+4. Update `requirements.txt`
+5. Test in local environment first
+
+## AI Agent Best Practices
+
+### Prompt Engineering
+- Store prompts in constants or config
+- Version prompts for A/B testing
+- Use system/user message separation
+- Include examples in prompts
+- Use LangChain MCP for complex prompt chains
+
+### LLM Response Handling
+```python
+def parse_llm_response(response: str) -> Dict:
+    """Always validate LLM outputs."""
+    try:
+        parsed = json.loads(response)
+        # Validate structure
+        assert "score" in parsed
+        assert 0 <= parsed["score"] <= 100
+        return parsed
+    except (json.JSONDecodeError, AssertionError) as e:
+        logger.error(f"Invalid LLM response: {e}")
+        return {"score": 50, "confidence": 0}  # Safe default
+```
+
+### Context Management
+- Keep context windows manageable
+- Summarize long conversations
+- Clear context when switching tasks
+- Use embeddings for retrieval
+
+## MCP Server Usage
+
+### When to Use Which MCP
+- **Context7**: Documentation, fact-checking, research
+- **Google MCP**: YouTube API queries, Google Cloud operations
+- **LangChain MCP**: Complex agent workflows, chain operations
+- **Figma MCP**: UI/UX design references (for docs/wireframes)
+
+### Example MCP Usage
+```python
+# Use Context7 for documentation lookup
+# Use Google MCP for YouTube metadata
+# Use LangChain for multi-step reasoning
+```
+
+## Git Workflow for Backend
+
+### MANDATORY: Feature Branch Workflow
+
+**NEVER work directly on main branch**
+
+#### Branch Creation
+```bash
+# Always create feature branch from main
+git checkout main
+git pull origin main
+git checkout -b feature/your-feature-name
+```
+
+#### Development Cycle
+1. Create feature branch
+2. Make changes and test locally
+3. Create changelog if significant change
+4. Commit with conventional message format
+5. Push branch to remote
+6. Create Pull Request for review
+7. Merge to main after approval
+8. Delete feature branch
+
+#### Before Committing
+- [ ] Run tests: `pytest` or tests in `scripts/`
+- [ ] Check for hardcoded secrets
+- [ ] Verify type hints are present
+- [ ] Update documentation if needed
+- [ ] Create changelog if significant change
+- [ ] Format commit message conventionally
+
+#### Commit Message Format
+```bash
+# Format: type(scope): subject
+git commit -m "feat(agent): add caching to Auditor agent
+
+- Implemented Redis caching for video metadata
+- Reduced API calls by 60%
+- See changelogs/2026-01-22-auditor-caching.md
+
+Closes #123"
+```
+
+**Commit Types:**
+- `feat:` new features
+- `fix:` bug fixes
+- `refactor:` code refactoring
+- `perf:` performance improvements
+- `security:` security fixes
+- `test:` test additions
+- `docs:` documentation
+- `chore:` maintenance
+
+## Changelog Requirements
+
+### Create Changelog For
+- ✅ New AI agent features or modifications
+- ✅ API endpoint additions/changes
+- ✅ Algorithm improvements
+- ✅ Performance optimizations (>10% improvement)
+- ✅ Security fixes
+- ✅ Deployment configuration changes
+- ✅ Major dependency updates
+- ✅ Database schema changes
+
+### Changelog Location
+`backend/changelogs/YYYY-MM-DD-brief-description.md`
+
+### Changelog Must Include
+```markdown
+# Feature Name
+
+**Type:** Feature | Fix | Refactor | Performance | Security
+**Date:** YYYY-MM-DD
+**Author:** Your Name
+**Branch:** feature/branch-name
+
+## Summary
+Brief description of changes
+
+## Changes Made
+- Detailed change 1
+- Detailed change 2
+
+## Impact
+- Performance impact
+- API changes
+- Breaking changes
+
+## Testing
+- How tested
+- Test results
+
+## Rollback Plan
+- Steps to revert if needed
+```
+
+### Integration with Git
+```bash
+# After creating changelog
+git add changelogs/2026-01-22-feature.md
+git add [other files]
+git commit -m "feat: implement feature
+
+See changelogs/2026-01-22-feature.md"
+```
+
+## Security Checklist
+- [ ] No API keys in code
+- [ ] Input validation on all endpoints
+- [ ] SQL injection prevention (if using SQL)
+- [ ] XSS prevention in responses
+- [ ] CORS configured properly
+- [ ] Rate limiting implemented
+- [ ] Authentication/authorization if needed
+- [ ] Secrets in environment variables
+
+## Code Review Checklist (Before PR)
+1. [ ] Error handling completeness
+2. [ ] Type hints accuracy
+3. [ ] Performance implications assessed
+4. [ ] Security vulnerabilities checked
+5. [ ] No code duplication
+6. [ ] Tests added/updated
+7. [ ] Documentation updated
+8. [ ] Resource cleanup (connections, files)
+9. [ ] Changelog created (if significant)
+10. [ ] Conventional commit message
+11. [ ] Branch up to date with main
+12. [ ] No merge conflicts

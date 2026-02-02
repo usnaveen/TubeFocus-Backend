@@ -1,246 +1,363 @@
-# YouTube Productivity Score Backend - Development Container
+# TubeFocus Backend API
 
-## Overview
-This backend provides advanced ML-powered services for the TubeFocus Chrome extension:
-- **Advanced Video Productivity Scoring**: Uses ensemble of sentence transformers and zero-shot classification models for highly accurate relevance scoring.
-- **Multi-Modal Analysis**: Analyzes video titles, descriptions, tags, and categories for comprehensive scoring.
-- **Model Training**: Includes MLP regressor for personalized scoring based on user feedback.
+Flask-based REST API that powers the TubeFocus Chrome extension with AI-driven video relevance scoring, behavioral coaching, content auditing, and semantic search over viewing history.
 
-## Features
+Deployed on **Google Cloud Run** as a Docker container.
 
-### Advanced ML Scoring System
-- **Ensemble Models**: Uses multiple sentence transformers for robust scoring
-- **Zero-Shot Classification**: BART-large-MNLI for topic classification
-- **Cross-Encoder**: MS-Marco model for fine-grained relevance scoring
-- **Multi-Modal Analysis**: Title, description, tags, and category scoring
-- **Personalized Training**: MLP regressor learns from user feedback
+## Architecture
 
-### Simplified Scoring System
-- **5 Sentence Transformers**: Ensemble of 5 models for reliable scoring
-- **Text Cleaning**: Intelligent filtering of description noise
-- **Three Modes**: title_only, title_and_description, title_and_clean_desc
-- **Fast Processing**: Optimized for quick response times
-- **Docker-Compatible**: Same approach as production container
+```mermaid
+graph TB
+    subgraph "Chrome Extension"
+        CS[Content Script]
+        BG[Background Service Worker]
+        PU[Popup UI]
+    end
 
-### API Endpoints
-- `/score/detailed` endpoint: Advanced scoring with multiple ML models and detailed analysis.
-- `/score/simple` endpoint: Simplified scoring with 3 modes (title_only, title_and_description, title_and_clean_desc)
-- `/feedback` endpoint: Collect and store user feedback for model training.
-- `/health` endpoint: Health check for the API.
+    subgraph "TubeFocus API – Flask on Cloud Run"
+        API[api.py<br/>Flask Application]
+        RL[Flask-Limiter<br/>Rate Limiting]
 
-## ML Models Used
+        subgraph "AI Agents"
+            GK[Gatekeeper Agent<br/>simple_scoring.py]
+            AU[Auditor Agent<br/>auditor_agent.py]
+            CO[Coach Agent<br/>coach_agent.py]
+            LI[Librarian Agent<br/>librarian_agent.py]
+        end
 
-### Sentence Transformers (Ensemble)
-- `all-MiniLM-L6-v2`: Fast, general-purpose embeddings
-- `multi-qa-MiniLM-L6-cos-v1`: Optimized for question-answer similarity
-- `paraphrase-MiniLM-L3-v2`: Specialized for paraphrase detection
-- `all-mpnet-base-v2`: High-quality semantic embeddings
-- `all-distilroberta-v1`: Robust RoBERTa-based embeddings
+        subgraph "Services"
+            YT[YouTube Client<br/>youtube_client.py]
+            TS[Transcript Service<br/>transcript_service.py]
+            FS[Firestore Service<br/>firestore_service.py]
+            CF[Config<br/>config.py]
+        end
+    end
 
-### Zero-Shot Classification
-- `facebook/bart-large-mnli`: For zero-shot topic classification
+    subgraph "External Services"
+        GEMINI[Google Gemini 2.0 Flash]
+        YTAPI[YouTube Data API v3]
+        FIRE[Cloud Firestore]
+        GCS[Google Cloud Storage]
+        YTSUB[youtube-transcript-api]
+    end
 
-### Cross-Encoder
-- `cross-encoder/ms-marco-MiniLM-L6-v2`: For re-ranking and fine-grained scoring
-
-## Setup & Installation
-
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
+    BG -->|HTTPS| API
+    API --> RL
+    API --> GK
+    API --> AU
+    API --> CO
+    API --> LI
+    GK --> YT
+    GK --> GEMINI
+    AU --> TS
+    AU --> GEMINI
+    CO --> GEMINI
+    LI --> FIRE
+    LI --> GEMINI
+    YT --> YTAPI
+    TS --> YTSUB
+    FS --> FIRE
+    FS --> GCS
 ```
 
-### 2. Download ML Models
-```bash
-python download_all_models.py
-```
-This will download all required models to the `models/` directory:
-- Sentence transformers for embedding generation
-- BART-large-MNLI for zero-shot classification
-- Cross-encoder for re-ranking
+## Agent System
 
-### 3. Set Environment Variables
-```bash
-export YOUTUBE_API_KEY="your_youtube_api_key"
-export API_KEY="your_secret_api_key"
+TubeFocus uses a multi-agent architecture where each agent has a distinct responsibility, latency profile, and data requirement.
+
+```mermaid
+graph LR
+    subgraph "Agent Pipeline"
+        direction TB
+        G["Gatekeeper<br/><i>Fast relevance scoring</i><br/>~1-2s latency"]
+        A["Auditor<br/><i>Deep content verification</i><br/>~3-5s latency"]
+        C["Coach<br/><i>Behavioral intervention</i><br/>Session-scoped"]
+        L["Librarian<br/><i>Semantic memory & RAG</i><br/>Persistent"]
+    end
+
+    G -->|"Score every video"| A
+    A -->|"On-demand deep analysis"| C
+    C -->|"Session monitoring"| L
+    L -->|"Long-term memory"| L
 ```
 
-### 4. Run the Development Server
-```bash
-python api.py
+### Gatekeeper Agent (`simple_scoring.py`)
+
+The fast-path agent. Called on every video navigation during an active session.
+
+- Fetches video metadata via YouTube Data API
+- Sends title + description + optional transcript excerpt to Gemini 2.0 Flash
+- Returns a 0-100 relevance score with reasoning
+- Target latency: under 2 seconds
+
+**Prompt strategy:** Structured JSON output with score and reasoning. Handles clickbait detection at a surface level by comparing title claims against description content.
+
+### Auditor Agent (`auditor_agent.py`)
+
+Deep content verification agent. Triggered on-demand when the user clicks "Deep Analyze."
+
+- Fetches up to 3,000 characters of transcript via `youtube-transcript-api`
+- Analyzes title vs. transcript alignment (clickbait detection)
+- Measures information density (0-100)
+- Determines if the video delivers on its title's promise
+- Returns: clickbait score, density score, key topics, watch/skip/skim recommendation
+- Falls back to title+description analysis when transcript is unavailable
+
+**Caching:** In-memory cache keyed by `{video_id}:{goal}` to avoid redundant Gemini calls.
+
+### Coach Agent (`coach_agent.py`)
+
+Behavioral monitoring agent. Operates at the session level.
+
+- Tracks score history, watch time, and video completion across a session
+- Detects patterns: score decline, repeated distractions, extended sessions without breaks
+- Generates contextual interventions based on coach mode:
+  - **Strict:** Alerts after 1 off-topic video
+  - **Balanced:** Allows up to 3, then nudges
+  - **Relaxed:** Gentle reminders only
+  - **Custom:** User-defined instruction following
+- Break reminders after configurable intervals (default: 60 minutes)
+- Intervention cooldown (2 minutes) to avoid notification spam
+- "Back on track" encouragement when scores improve after a dip
+
+**State:** In-memory session store. Sessions are ephemeral — cleared on session end or server restart.
+
+### Librarian Agent (`librarian_agent.py`)
+
+Persistent memory and semantic search agent.
+
+- Indexes video transcripts into **Firestore** with vector embeddings
+- Chunks transcripts into 500-character segments
+- Generates embeddings via `text-embedding-004` model
+- Supports **Firestore Vector Search** with cosine distance
+- RAG chat: answers questions about previously watched content using retrieved context + Gemini
+
+**Storage:** Firestore `video_chunks` collection with vector fields. Persistent across deployments.
+
+## Request Flow
+
+```mermaid
+sequenceDiagram
+    participant CS as Content Script
+    participant BG as Background SW
+    participant API as Flask API
+    participant YT as YouTube API
+    participant GM as Gemini API
+
+    CS->>BG: videoData { videoId }
+    BG->>API: POST /score { video_url, goal, mode }
+    API->>YT: GET /videos?id={videoId}
+    YT-->>API: title, description, tags, category
+    API->>GM: Scoring prompt (title + desc + goal)
+    GM-->>API: { score: 78, reasoning: "..." }
+    API-->>BG: { score: 78, mode: "title_and_description" }
+    BG->>CS: { type: NEW_SCORE, score: 78 }
+    CS->>CS: Apply color overlay + score badge
 ```
 
 ## API Endpoints
 
-### 1. `/score/detailed` (POST) - Detailed Scoring
-Advanced scoring with multiple ML models and detailed analysis.
+### Scoring
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/score` | Score a video's relevance to a learning goal |
+
+**Request body:**
 ```json
 {
-  "video_id": "dQw4w9WgXcQ",
-  "goal": "learn about music videos",
-  "parameters": ["title", "description", "tags", "category"]
-}
-```
-**Response:**
-```json
-{
-  "title_score": 0.85,
-  "description_score": 0.72,
-  "tags_score": 0.65,
-  "category_score": 0.90,
-  "category_name": "Education",
-  "score": 0.78
+  "video_url": "https://youtube.com/watch?v=abc123",
+  "goal": "Learn React hooks",
+  "mode": "title_and_description",
+  "transcript": ""
 }
 ```
 
-### 2. `/score/simple` (POST) - Simplified Scoring
-Simplified scoring using 5 sentence transformers with 3 different modes.
-```json
-{
-  "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "goal": "learn about music videos",
-  "mode": "title_and_clean_desc"
-}
-```
-**Response:**
-```json
-{
-  "score": 75,
-  "mode": "title_and_clean_desc"
-}
-```
-**Available Modes:**
-- `title_only`: Uses only video title (fastest)
-- `title_and_description`: Uses title + full description (most comprehensive)
-- `title_and_clean_desc`: Uses title + cleaned description (filters noise)
+**Modes:** `title_only`, `title_and_description`, `title_and_clean_desc`
 
-### 3. `/feedback` (POST) - User Feedback
-Collect user feedback for model training.
+### Auditor
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/audit` | Deep content analysis with clickbait detection |
+
+**Request body:**
 ```json
 {
-  "desc_score": 0.72,
-  "title_score": 0.85,
-  "tags_score": 0.65,
-  "category_score": 0.90,
-  "user_score": 4.5
-}
-```
-**Response:**
-```json
-{
-  "status": "Feedback saved",
-  "retrained": true
+  "video_id": "abc123",
+  "title": "Learn React in 10 Minutes",
+  "description": "...",
+  "goal": "Master React hooks",
+  "transcript": null
 }
 ```
 
-### 4. `/health` (GET) - Health Check
-Checks if the API is running.
-**Response:** `YouTube Relevance Scorer API is running!`
+**Response includes:** `clickbait_score`, `density_score`, `delivers_promise`, `key_topics`, `recommendation` (watch/skip/skim), `relevance_to_goal`
 
-## Development Tools
+### Coach
 
-### Model Management
-- `download_all_models.py`: Download all required ML models
-- `download_models.py`: Download sentence transformer models
-- `fix_cross_encoder_download.py`: Fix cross-encoder model download
-- `bigmodeltest.py`: Test and compare different models
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/coach/analyze` | Analyze session behavior and generate interventions |
 
-### Testing Scripts
-- `test_models.py`: Test model performance
-- `test_title_scoring.py`: Test title scoring functionality
-- `test_description_scoring.py`: Test description scoring
-- `test_tag_scoring.py`: Test tag scoring
-- `test_category_scoring.py`: Test category scoring
-- `test_youtube_metadata.py`: Test YouTube API integration
-
-### Training and Feedback
-- `model_trainer.py`: MLP regressor training and model management
-- `data_manager.py`: Feedback data storage and retrieval
-- `main.py`: Interactive testing and feedback collection
-
-## File Structure
-```
-YouTube Productivity Score Development Container/
-├── api.py                          # Main Flask application with all endpoints
-├── simple_scoring.py               # Simplified scoring implementation
-├── scoring_modules.py              # Advanced ML scoring modules
-├── youtube_scraper.py              # YouTube metadata fetching
-├── youtube_api.py                  # YouTube API integration
-├── model_trainer.py                # ML model training
-├── data_manager.py                 # Feedback data management
-├── config.py                       # Configuration management
-├── requirements.txt                # Python dependencies
-├── download_all_models.py          # Model download script
-├── models/                         # Downloaded ML models
-├── test_*.py                       # Testing scripts
-└── README.md                       # This file
+**Request body:**
+```json
+{
+  "session_id": "session_1706886400000",
+  "goal": "Learn React hooks",
+  "session_data": [
+    { "video_id": "abc", "title": "React Hooks", "score": 85, "timestamp": "..." }
+  ]
+}
 ```
 
-## Usage Examples
+### Librarian
 
-### Detailed Video Scoring
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/librarian/index` | Index a video transcript for semantic search |
+| `POST` | `/librarian/search` | Semantic search over viewing history |
+| `POST` | `/librarian/chat` | RAG chat over indexed content |
+| `GET`  | `/librarian/stats` | Get index statistics |
+| `GET`  | `/librarian/get_highlights` | Retrieve all highlights |
+| `GET`  | `/librarian/video/<id>` | Get a specific indexed video |
+
+### Highlights (Firestore)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/highlights` | Save a timestamp highlight |
+| `GET`  | `/highlights` | List all highlights |
+| `GET`  | `/highlights/video/<id>` | Highlights for a specific video |
+| `DELETE` | `/highlights/<id>` | Delete a highlight |
+
+### Operations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`  | `/health` | Health check with dependency status |
+| `POST` | `/backup/chromadb` | Backup data to GCS |
+| `POST` | `/restore/chromadb` | Restore data from GCS |
+
+## Error Handling
+
+All errors return a standardized JSON envelope:
+
+```json
+{
+  "error": true,
+  "error_code": 1001,
+  "message": "Video not found or inaccessible",
+  "details": {},
+  "timestamp": "2026-01-15T10:30:00"
+}
+```
+
+**Error code ranges:**
+
+| Range | Category |
+|-------|----------|
+| 1001-1099 | Video errors (not found, private, deleted) |
+| 1101-1199 | Data availability (missing title, description) |
+| 1201-1299 | API configuration (missing keys, quota exceeded) |
+| 1301-1399 | Scoring errors (models not loaded, scoring failed) |
+| 1401-1499 | Request validation (invalid goal, invalid API key) |
+| 1501-1599 | System errors (internal error, service unavailable) |
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Framework | Flask 2.3.2 |
+| AI Model | Google Gemini 2.0 Flash |
+| Embeddings | text-embedding-004 |
+| Vector Search | Firestore Vector Search (cosine) |
+| Persistent Storage | Cloud Firestore |
+| Backup Storage | Google Cloud Storage |
+| Transcripts | youtube-transcript-api |
+| Video Metadata | YouTube Data API v3 |
+| Rate Limiting | Flask-Limiter |
+| Deployment | Google Cloud Run (Docker + Gunicorn) |
+| Language | Python 3.11 |
+
+## Project Structure
+
+```
+backend/
+├── api.py                  # Flask application, all route handlers
+├── config.py               # Centralized configuration management
+├── simple_scoring.py       # Gatekeeper Agent - LLM-based scoring
+├── scoring_modules.py      # Component-based scoring (title/desc/tags/category)
+├── auditor_agent.py        # Auditor Agent - content verification
+├── coach_agent.py          # Coach Agent - behavioral intervention
+├── librarian_agent.py      # Librarian Agent - Firestore vector search + RAG
+├── youtube_client.py       # YouTube Data API wrapper
+├── transcript_service.py   # youtube-transcript-api wrapper
+├── firestore_service.py    # Firestore + GCS backup/restore
+├── data_manager.py         # Feedback data management
+├── Dockerfile              # Container definition
+├── requirements.txt        # Python dependencies
+├── .env.example            # Environment variable template
+└── changelogs/             # Change history
+```
+
+## Setup
+
+### Prerequisites
+
+- Python 3.11+
+- Google Cloud project with Firestore enabled
+- YouTube Data API key
+- Google Gemini API key
+
+### Local Development
+
 ```bash
-curl -X POST http://localhost:8080/score/detailed \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-KEY: your_api_key' \
-  -d '{
-    "video_id": "dQw4w9WgXcQ",
-    "goal": "learn about music videos",
-    "parameters": ["title", "description"]
-  }'
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Run locally
+python api.py
 ```
 
-### Simplified Video Scoring
+The server starts on `http://localhost:8080`.
+
+### Production Deployment (Cloud Run)
+
 ```bash
-curl -X POST http://localhost:8080/score/simple \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-KEY: your_api_key' \
-  -d '{
-    "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "goal": "learn about music videos",
-    "mode": "title_and_clean_desc"
-  }'
+# Build and deploy
+./deploy_to_cloud_run.sh
+
+# Or manually
+gcloud run deploy yt-scorer-api \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated
 ```
 
-## Development Notes
+### Environment Variables
 
-### Model Performance
-- **Ensemble Approach**: Multiple models provide more robust scoring
-- **Local Execution**: All ML models run locally for privacy
-- **Caching**: Models are loaded once and cached in memory
-- **Fallback**: Graceful degradation if some models fail to load
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `YOUTUBE_API_KEY` | Yes | YouTube Data API v3 key |
+| `GOOGLE_API_KEY` | Yes | Google Gemini API key |
+| `API_KEY` | Yes | API authentication key for extension requests |
+| `PORT` | No | Server port (default: 8080) |
+| `ENVIRONMENT` | No | `development` or `production` |
+| `DEBUG` | No | Enable debug mode (default: false) |
+| `RATELIMIT_DEFAULT` | No | Rate limit config (default: `200 per day;50 per hour`) |
 
-### Training and Feedback
-- **User Feedback**: Collects user ratings to improve scoring
-- **MLP Regressor**: Trains on feedback data for personalized scoring
-- **Model Versioning**: Tracks model versions and performance
-- **Automatic Retraining**: Retrains when sufficient feedback is collected
+### Health Check
 
-### Privacy and Security
-- **Local Processing**: ML models run locally, no data sent to external services
-- **API Key Protection**: Secure API key validation
-- **Data Deletion**: Session data deleted after summary generation
-- **No Persistent Storage**: User data not stored permanently
-
-## Troubleshooting
-
-### Model Download Issues
-If models fail to download:
 ```bash
-python download_all_models.py
-```
-Run multiple times if network issues occur.
-
-### Memory Issues
-For low-memory environments, reduce the number of models in `simple_scoring.py`.
-
-### API Key Issues
-Ensure environment variables are set:
-```bash
-echo $YOUTUBE_API_KEY
-echo $API_KEY
+curl https://your-cloud-run-url/health
 ```
 
-## License
-MIT
-
+Returns dependency status for YouTube API, Gemini API, and Firestore.

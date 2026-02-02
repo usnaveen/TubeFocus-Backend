@@ -1,0 +1,17 @@
+{
+    "functions": [
+        {
+            "source": "functions",
+            "codebase": "default",
+            "ignore": [
+                "venv",
+                ".git",
+                "firebase-debug.log",
+                "firebase-debug.*.log"
+            ],
+            "predeploy": [
+                "pip3 install -r functions/requirements.txt"
+            ]
+        }
+    ]
+}

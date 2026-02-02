@@ -1,63 +1,77 @@
-# Python virtual environment
-venv/
-.venv/
-env/
+# ===== Environment & Secrets =====
 .env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+**/secrets/
+**/*secret*.json
+**/*credentials*.json
+**/*-key.json
+service-account*.json
 
-# Byte-compiled / optimized files
+# ===== Python =====
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# macOS system files
-.DS_Store
-
-# --- CRITICAL: Ignore the downloaded models ---
-# This prevents uploading gigabytes of data to your repository.
-# The models will be downloaded by anyone who runs the setup script.
+# ===== Data & Models =====
 /models/
-
-# Logs and temporary files
-*.log
-app.log
-*.tmp
-*.temp
-
-# Testing files (can be regenerated)
-test_*.py
-test_models.py
-
-# Documentation files (not needed in production)
-*.md
-!README.md
-
-# Development and deployment files
-Dockerfile
-runtime.txt
-betaDeployment.md
-instructions.md
-Next steps.md
-
-# Model training artifacts
 *.pkl
 *.joblib
+*.h5
+*.pt
+*.pth
 model_versions.json
 weights.json
-
-# Feedback data (user data)
 feedback_data.csv
+chroma_data/
 
-# IDE and editor files
+# ===== Logs =====
+*.log
+app.log
+server.log
+redis_logs/
+
+# ===== OS Files =====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ===== IDE =====
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS generated files
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Temporary download directories
+# ===== Temporary =====
+*.tmp
+*.temp
 temp_*/
 cache/
+
+# ===== Build & Deploy =====
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ===== Testing (keep in scripts/ folder) =====
+# Don't ignore scripts/ folder itself, just root-level test files
+/test_*.py
+/debug_*.py
+/verify_*.py
