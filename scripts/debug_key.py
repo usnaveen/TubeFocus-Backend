@@ -2,7 +2,8 @@ import google.generativeai as genai
 import os
 
 # HARDCODED KEY for debugging only
-TEST_KEY = "AIzaSyDMzBVzlHdB6wmVWRjQGtYytz72hnePcBA"
+# Placeholder key
+TEST_KEY = "your_test_key_here"
 
 print(f"Testing key: {TEST_KEY[:10]}...")
 

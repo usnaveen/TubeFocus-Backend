@@ -2,7 +2,8 @@ import google.generativeai as genai
 import os
 
 # HARDCODED KEY that we think is correct
-TEST_KEY = "AIzaSyDMzBVzlHdB6wmVWRjQGtYytz72hnePcBA"
+# Placeholder key
+TEST_KEY = "your_test_key_here"
 
 print(f"Testing generation with key: {TEST_KEY[:10]}...")
 

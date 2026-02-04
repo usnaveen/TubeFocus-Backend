@@ -26,7 +26,7 @@ if [ ! -f .env ]; then
     cat > .env << 'EOF'
 # TubeFocus Backend Configuration
 GOOGLE_API_KEY=your_gemini_api_key_here
-YOUTUBE_API_KEY=AIzaSyAiwFQ9eSuuMTdcY4XxLCU6991hfjlHeuE
+YOUTUBE_API_KEY=your_youtube_api_key_here
 API_KEY=test_key
 PORT=8080
 ENVIRONMENT=development
