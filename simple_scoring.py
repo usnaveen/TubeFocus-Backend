@@ -2,6 +2,7 @@ import os
 from google import genai
 import logging
 import json
+import re
 from youtube_client import get_video_details
 from config import Config
 
@@ -24,7 +25,7 @@ def _get_scoring_prompt(title, description, goal, intent=None, transcript=""):
          intent_section = f"""
 User Intent: {intent.get('intent', 'General Learning')}
 Constraints: {intent.get('constraints', '')}
-Note: Strict adherence to these constraints is required.
+Note: Use constraints as guidance. Do not over-penalize adjacent technical topics.
 """
 
     return f"""You are an expert productivity assistant helping a user decide if a YouTube video is worth watching based on their specific goal.
@@ -41,7 +42,7 @@ Task: Rate the relevance of this video to the user's goal on a scale of 0 to 100
 - Consider if the video actually teaches what is needed or just discusses it.
 - If the title is vague but the transcript confirms relevance, score high.
 - If the title is clickbait and transcript is irrelevant, score low.
-- If the User Intent is strict (e.g. Exam Prep), penalize entertainment, tangents, or history heavily.
+- Penalize entertainment/tangents, but keep technically adjacent topics in a fair medium score range.
 
 Respond with valid JSON only:
 {{
@@ -49,6 +50,69 @@ Respond with valid JSON only:
   "reasoning": "<short_explanation>"
 }}
 """
+
+def _normalize_tokens(text: str) -> list:
+    return [t for t in re.split(r'[^a-z0-9]+', (text or '').lower()) if len(t) > 2]
+
+def _is_ai_ml_goal(goal: str) -> bool:
+    goal_text = (goal or '').lower()
+    keywords = [
+        'deep learning', 'machine learning', 'ml', 'artificial intelligence', 'ai',
+        'llm', 'transformer', 'neural network', 'interview'
+    ]
+    return any(k in goal_text for k in keywords)
+
+def _is_ai_ml_video_topic(title: str, description: str, transcript: str = '') -> bool:
+    text = f"{title} {description} {transcript[:2000]}".lower()
+    keywords = [
+        'kv cache', 'key value cache', 'transformer', 'attention', 'llm',
+        'inference', 'token', 'decoder', 'prompt caching', 'rag',
+        'embedding', 'fine tuning', 'quantization', 'neural network', 'deep learning'
+    ]
+    return any(k in text for k in keywords)
+
+def _goal_overlap_ratio(goal: str, title: str, description: str) -> float:
+    stopwords = {
+        'the', 'and', 'for', 'with', 'from', 'that', 'this', 'what', 'when', 'where',
+        'why', 'how', 'learn', 'learning', 'video', 'videos', 'about', 'into'
+    }
+    goal_tokens = [t for t in _normalize_tokens(goal) if t not in stopwords]
+    if not goal_tokens:
+        return 0.0
+    video_tokens = set(_normalize_tokens(f"{title} {description[:1200]}"))
+    overlap = sum(1 for t in goal_tokens if t in video_tokens)
+    return overlap / len(goal_tokens)
+
+def _postprocess_score(score: int, goal: str, title: str, description: str, transcript: str = "") -> tuple:
+    adjusted = int(score)
+    adjustments = []
+
+    overlap_ratio = _goal_overlap_ratio(goal, title, description)
+    ai_goal = _is_ai_ml_goal(goal)
+    ai_video = _is_ai_ml_video_topic(title, description, transcript)
+
+    # Avoid harsh under-scoring for clearly related technical topics.
+    if ai_goal and ai_video and adjusted < 58:
+        adjusted = 58
+        adjustments.append('ai_ml_topic_floor_58')
+
+    if overlap_ratio >= 0.35 and adjusted < 60:
+        adjusted = 60
+        adjustments.append('goal_overlap_floor_60')
+
+    # Interview prep should still allow deep technical adjacent concepts.
+    goal_text = (goal or '').lower()
+    if 'interview' in goal_text and ai_video and adjusted < 62:
+        adjusted = 62
+        adjustments.append('interview_adjacent_topic_floor_62')
+
+    adjusted = max(0, min(100, adjusted))
+    return adjusted, {
+        'overlap_ratio': round(overlap_ratio, 3),
+        'ai_ml_goal': ai_goal,
+        'ai_ml_video_topic': ai_video,
+        'adjustments': adjustments
+    }
 
 def compute_simple_score(video_url: str, goal: str, transcript: str = "", intent=None, blocked_channels=None, video_details=None) -> tuple:
     """
@@ -129,10 +193,18 @@ def compute_simple_score(video_url: str, goal: str, transcript: str = "", intent
         result = json.loads(text_response)
         score = int(result.get('score', 0))
         reasoning = result.get('reasoning', '')
+        score, score_adjustment_info = _postprocess_score(
+            score=score,
+            goal=goal,
+            title=title,
+            description=description,
+            transcript=transcript
+        )
         
         logger.info(f"Scored {video_url} against '{goal}': {score} (Reason: {reasoning})")
         debug_info['gemini_api']['status'] = 'success'
         debug_info['gemini_api']['raw_response'] = text_response
+        debug_info['post_processing'] = score_adjustment_info
         
         return score, reasoning, debug_info
         

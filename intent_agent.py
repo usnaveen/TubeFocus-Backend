@@ -19,7 +19,7 @@ class IntentAgent:
         "Course/Playlist Completion": "Linear focus. Penalize videos not in sequence or unrelated to the specific course topic.",
         "Concept Introduction": "Lenient. Allow broad overviews and high-level explanations. Avoid overly dense technical details.",
         "Roadmap/Guidance": "Meta-learning focus. Prioritize 'how to learn', 'pathways', and 'mistakes to avoid'.",
-        "Interview Prep": "High specificity. Focus on LeetCode, system design, star method, and common interview questions.",
+        "Interview Prep": "Interview-focused. Prioritize interview-relevant content, but allow adjacent technical foundations (e.g., architecture, transformer internals, KV cache).",
         "Problem Solving": "highly specific. User wants a solution to a specific error or bug. Penalize general theory.",
         "Skill Acquisition": "Deep dive. Focus on tutorials, hands-on practice, and structured learning.",
         "Project Building": "Practical. 'How to build X'. Focus on stack-specific implementation details.",

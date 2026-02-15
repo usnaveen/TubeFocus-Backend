@@ -499,12 +499,19 @@ def coach_analyze():
         
     except Exception as e:
         logger.error(f"/coach/analyze error: {e}", exc_info=True)
-        return create_error_response(
-            APIErrorCodes.INTERNAL_ERROR,
-            "Coach analysis failed",
-            500,
-            {'error_details': str(e)}
-        )
+        # Fail-open so frontend coaching does not spam hard errors in the extension console.
+        return jsonify({
+            'success': False,
+            'session_id': data.get('session_id') if 'data' in locals() and isinstance(data, dict) else None,
+            'analysis': {
+                'intervention_needed': False,
+                'pattern_detected': 'error',
+                'message': 'Coach temporarily unavailable.',
+                'suggested_action': 'continue'
+            },
+            'error': str(e),
+            'timestamp': __import__('datetime').datetime.now().isoformat()
+        }), 200
 
 
 

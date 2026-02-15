@@ -63,13 +63,73 @@ class CoachAgent:
             'is_watching': False,
             'last_activity': datetime.now(),
             'completed_videos': 0,
-            'got_back_on_track': False  # Flag to track if user improved after distraction
+            'got_back_on_track': False,  # Flag to track if user improved after distraction
+            'seen_event_keys': set()
         }
         logger.info(f"Coach started session {session_id} with mode: {coach_mode}")
         
         return {
             'message': self._get_session_start_message(goal, coach_mode),
             'type': 'session_start'
+        }
+
+    def analyze_session(self, session_id: str, session_data: List[Dict], goal: str) -> Dict:
+        """
+        Analyze batch session data from frontend and return latest intervention + summary.
+        This is designed for stateless API calls where client sends recent session history.
+        """
+        if session_id not in self.sessions:
+            self.start_session(session_id=session_id, goal=goal, coach_mode='balanced')
+
+        session = self.sessions[session_id]
+        session['goal'] = goal or session.get('goal', '')
+        seen = session.setdefault('seen_event_keys', set())
+
+        latest_intervention = None
+
+        for index, item in enumerate(session_data or []):
+            if not isinstance(item, dict):
+                continue
+
+            video_id = str(item.get('video_id') or item.get('videoId') or '')
+            title = str(item.get('title') or '')
+            timestamp = str(item.get('timestamp') or item.get('at') or '')
+            try:
+                score_value = float(item.get('score', 50))
+            except Exception:
+                score_value = 50.0
+
+            # Prevent re-processing the same history on repeated polling calls.
+            event_key = f"{video_id}:{timestamp}:{round(score_value, 2)}:{index}"
+            if event_key in seen:
+                continue
+            seen.add(event_key)
+
+            payload = {
+                'video_id': video_id,
+                'title': title,
+                'score': score_value,
+                'watch_duration_seconds': int(item.get('watch_duration_seconds', 0) or 0),
+                'completed': bool(item.get('completed', True))
+            }
+
+            intervention = self.record_video(session_id, payload)
+            if intervention:
+                latest_intervention = intervention
+
+        summary = self.get_session_summary(session_id) or {
+            'videos_watched': 0,
+            'avg_score': 0,
+            'goal': goal
+        }
+
+        return {
+            'intervention_needed': bool(latest_intervention and latest_intervention.get('intervention_needed', True)),
+            'pattern_detected': (latest_intervention or {}).get('type', 'on_track'),
+            'message': (latest_intervention or {}).get('message', f"You're progressing on '{goal}'."),
+            'suggested_action': (latest_intervention or {}).get('suggested_action', 'continue'),
+            'summary': summary,
+            'intervention': latest_intervention
         }
     
     def _get_session_start_message(self, goal: str, coach_mode: str) -> str:
