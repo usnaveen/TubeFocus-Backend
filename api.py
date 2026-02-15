@@ -15,6 +15,9 @@ from transcript_service import get_transcript, get_transcript_excerpt
 from auditor_agent import get_auditor_agent
 from coach_agent import get_coach_agent
 from librarian_agent import get_librarian_agent
+from navigator_agent import get_navigator_agent
+from gatekeeper_agent import get_gatekeeper_agent
+from intent_agent import get_intent_agent
 import numpy as np
 
 # --- Custom Error Codes and Messages ---
@@ -227,8 +230,13 @@ def score_endpoint():
         data = request.get_json(force=True)
         video_url = data.get('video_url')
         goal = data.get('goal')
+        goal = data.get('goal')
         mode = data.get('mode', 'title_and_description')  # Default to "title_and_description"
         transcript = data.get('transcript', '')
+
+        # Infer Intent (Cached/Lightweight)
+        intent = get_intent_agent().infer_intent(goal)
+        logger.info(f"Inferred Intent for '{goal}': {intent['intent']}")
 
         # Validate required fields
         if not video_url:
@@ -291,7 +299,9 @@ def score_endpoint():
                 score = compute_simple_score_title_and_clean_desc(video_url, goal)
                 debug_info = {}
             else:
-                score, reasoning, debug_info = compute_simple_score(video_url, goal, transcript=transcript)
+                gatekeeper = get_gatekeeper_agent()
+                blocked_channels = gatekeeper.get_blocked_channels()
+                score, reasoning, debug_info = compute_simple_score(video_url, goal, transcript=transcript, intent=intent, blocked_channels=blocked_channels)
             
             logger.info(f"/score/simple {video_url} {mode} -> {score}")
             return jsonify({
@@ -299,7 +309,8 @@ def score_endpoint():
                 "mode": mode,
                 "video_url": video_url,
                 "goal": goal,
-                "debug_details": debug_info
+                "debug_details": debug_info,
+                "intent": intent.get('intent', 'General')
             }), 200
             
         except ValueError as ve:
@@ -355,8 +366,7 @@ def audit_video():
         "video_id": "...",
         "title": "...",
         "description": "...",
-        "goal": "...",
-        "transcript": "..." (optional)
+        "goal": "..."
     }
     """
     require_api_key()
@@ -402,8 +412,7 @@ def audit_video():
             video_id=video_id,
             title=title,
             description=description,
-            goal=goal,
-            transcript=transcript
+            goal=goal
         )
         
         # Return analysis results
@@ -746,30 +755,131 @@ def librarian_chat():
             {'error_details': str(e)}
         )
 
-@app.route('/librarian/get_highlights', methods=['GET'])
-def librarian_get_highlights():
+@app.route('/navigator/chapters', methods=['POST'])
+def navigator_get_chapters():
     """
-    Get all highlights stored in the Librarian.
-    GET /librarian/get_highlights
+    Navigator Agent endpoint - Get video chapters.
+    POST /navigator/chapters
+    Body: { "video_id": "..." }
     """
     require_api_key()
     try:
-        librarian = get_librarian_agent()
-        highlights = librarian.get_all_highlights()
+        data = request.get_json(force=True)
+        video_id = data.get('video_id')
+        
+        if not video_id:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "video_id is required",
+                400,
+                {'missing_field': 'video_id'}
+            )
+            
+        navigator = get_navigator_agent()
+        result = navigator.get_chapters(video_id)
         
         return jsonify({
             'success': True,
-            'highlights': highlights
+            'result': result
         }), 200
         
     except Exception as e:
-        logger.error(f"/librarian/get_highlights error: {e}", exc_info=True)
+        logger.error(f"/navigator/chapters error: {e}", exc_info=True)
         return create_error_response(
             APIErrorCodes.INTERNAL_ERROR,
-            "Failed to retrieve highlights",
+            "Navigator chapters failed",
             500,
             {'error_details': str(e)}
         )
+
+@app.route('/gatekeeper/filter', methods=['POST'])
+def gatekeeper_filter():
+    """
+    Gatekeeper Agent endpoint - Filter recommendations.
+    POST /gatekeeper/filter
+    Body: { 
+        "goal": "...", 
+        "videos": [ {"id": "...", "title": "..."}, ... ] 
+    }
+    """
+    require_api_key()
+    try:
+        data = request.get_json(force=True)
+        goal = data.get('goal')
+        videos = data.get('videos', [])
+        
+        if not goal:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "goal is required",
+                400,
+                {'missing_field': 'goal'}
+            )
+            
+        if not videos:
+            return jsonify({'success': True, 'results': []}), 200
+            
+        # Infer Intent
+        intent = get_intent_agent().infer_intent(goal)
+        
+        gatekeeper = get_gatekeeper_agent()
+        results = gatekeeper.filter_recommendations(videos, goal, intent=intent)
+        
+        return jsonify({
+            'success': True,
+            'results': results
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"/gatekeeper/filter error: {e}", exc_info=True)
+        # Fail open (return empty results, frontend should probably keep videos)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Gatekeeper filtering failed",
+            500,
+            {'error_details': str(e)}
+        )
+
+@app.route('/gatekeeper/block_channel', methods=['POST'])
+def gatekeeper_block_channel():
+    """
+    Block a specific channel.
+    POST /gatekeeper/block_channel
+    Body: { "channel_name": "..." }
+    """
+    require_api_key()
+    try:
+        data = request.get_json(force=True)
+        channel = data.get('channel_name')
+        if not channel:
+            return create_error_response(APIErrorCodes.MISSING_REQUIRED_FIELDS, "channel_name required", 400)
+            
+        get_gatekeeper_agent().block_channel(channel)
+        return jsonify({'success': True, 'message': f'Blocked {channel}'}), 200
+    except Exception as e:
+         return create_error_response(APIErrorCodes.INTERNAL_ERROR, str(e), 500)
+
+@app.route('/gatekeeper/unblock_channel', methods=['POST'])
+def gatekeeper_unblock_channel():
+    """
+    Unblock a specific channel.
+    POST /gatekeeper/unblock_channel
+    Body: { "channel_name": "..." }
+    """
+    require_api_key()
+    try:
+        data = request.get_json(force=True)
+        channel = data.get('channel_name')
+        if not channel:
+            return create_error_response(APIErrorCodes.MISSING_REQUIRED_FIELDS, "channel_name required", 400)
+            
+        get_gatekeeper_agent().unblock_channel(channel)
+        return jsonify({'success': True, 'message': f'Unblocked {channel}'}), 200
+    except Exception as e:
+         return create_error_response(APIErrorCodes.INTERNAL_ERROR, str(e), 500)
+
+
+# ===== FIRESTORE ENDPOINTS: Persistent Storage =====
 
 
 
@@ -1004,6 +1114,175 @@ def handle_unexpected_error(error):
     )
 
 # Handle structured API errors consistently as JSON
+
+@app.route('/librarian/save', methods=['POST'])
+def librarian_save_item():
+    """
+    Unified save endpoint.
+    POST /librarian/save
+    Body: {
+      "video_id": "...",
+      "title": "...",
+      "goal": "...",
+      "score": 72,
+      "video_url": "...",
+      "transcript": "...",   # optional
+      "description": "..."   # required if transcript missing
+    }
+    """
+    require_api_key()
+    try:
+        data = request.get_json(force=True)
+        video_id = data.get('video_id')
+        title = data.get('title')
+        goal = data.get('goal')
+        score = data.get('score', 100)
+        video_url = data.get('video_url', '')
+        transcript = data.get('transcript', '')
+        description = data.get('description', '')
+
+        if not video_id or not title or not goal:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "video_id, title, and goal are required",
+                400,
+                {'missing_field': 'video_id/title/goal'}
+            )
+
+        if not transcript and not description:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "description is required when transcript is unavailable",
+                400,
+                {'missing_field': 'description'}
+            )
+
+        librarian = get_librarian_agent()
+        result = librarian.save_video_item(
+            video_id=video_id,
+            title=title,
+            user_goal=goal,
+            score=score,
+            video_url=video_url,
+            transcript=transcript,
+            description=description
+        )
+
+        if result.get('success'):
+            return jsonify({
+                'success': True,
+                'message': 'Video saved',
+                'save_mode': result.get('save_mode')
+            }), 200
+
+        return jsonify({
+            'success': False,
+            'error': result.get('error', 'Failed to save')
+        }), 500
+
+    except Exception as e:
+        logger.error(f"/librarian/save error: {e}", exc_info=True)
+        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Save failed", 500, {'error': str(e)})
+
+@app.route('/librarian/save_summary', methods=['POST'])
+def librarian_save_summary():
+    """
+    Persist a summary text captured from YouTube Ask panel.
+    POST /librarian/save_summary
+    Body: {
+      "video_id": "...",
+      "title": "...",
+      "goal": "...",
+      "summary": "...",
+      "source": "youtube_ask",
+      "video_url": "..."
+    }
+    """
+    require_api_key()
+    try:
+        data = request.get_json(force=True)
+        video_id = data.get('video_id')
+        title = data.get('title')
+        goal = data.get('goal')
+        summary = data.get('summary')
+        source = data.get('source', 'youtube_ask')
+        video_url = data.get('video_url', '')
+
+        if not video_id or not title or not goal or not summary:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "video_id, title, goal, and summary are required",
+                400,
+                {'missing_field': 'video_id/title/goal/summary'}
+            )
+
+        librarian = get_librarian_agent()
+        save_result = librarian.save_video_summary(
+            video_id=video_id,
+            title=title,
+            user_goal=goal,
+            summary=summary,
+            preset=source,
+            video_url=video_url
+        )
+        if not save_result.get('success'):
+            return jsonify({'success': False, 'error': save_result.get('error', 'Failed to save summary')}), 500
+
+        return jsonify({
+            'success': True,
+            'message': 'Summary saved',
+            'source': source
+        }), 200
+
+    except Exception as e:
+        logger.error(f"/librarian/save_summary error: {e}", exc_info=True)
+        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Save summary failed", 500, {'error': str(e)})
+
+@app.route('/librarian/saved_videos', methods=['GET'])
+def librarian_get_saved_videos():
+    """
+    Get manually saved videos.
+    GET /librarian/saved_videos
+    """
+    require_api_key()
+    try:
+        librarian = get_librarian_agent()
+        videos = librarian.get_saved_videos(limit=50)
+        return jsonify({'success': True, 'videos': videos}), 200
+    except Exception as e:
+        logger.error(f"/librarian/saved_videos error: {e}", exc_info=True)
+        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Get saved videos failed", 500, {'error': str(e)})
+
+@app.route('/librarian/get_highlights', methods=['GET'])
+def librarian_get_highlights():
+    """
+    Get recent highlights from all videos.
+    GET /librarian/get_highlights
+    """
+    require_api_key()
+    try:
+        librarian = get_librarian_agent()
+        highlights = librarian.get_all_highlights(limit=50)
+        return jsonify({'success': True, 'highlights': highlights}), 200
+    except Exception as e:
+        logger.error(f"/librarian/get_highlights error: {e}", exc_info=True)
+        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Get highlights failed", 500, {'error': str(e)})
+
+@app.route('/librarian/summaries', methods=['GET'])
+def librarian_get_saved_summaries():
+    """
+    Get saved summaries.
+    GET /librarian/summaries
+    """
+    require_api_key()
+    try:
+        librarian = get_librarian_agent()
+        summaries = librarian.get_saved_summaries(limit=50)
+        return jsonify({'success': True, 'summaries': summaries}), 200
+    except Exception as e:
+        logger.error(f"/librarian/summaries error: {e}", exc_info=True)
+        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Get summaries failed", 500, {'error': str(e)})
+
 @app.errorhandler(APIError)
 def handle_api_error(error):
     return create_error_response(error.error_code, error.message, error.http_status, error.details)
@@ -1015,7 +1294,7 @@ def not_found(error):
         APIErrorCodes.INTERNAL_ERROR,
         "Endpoint not found",
         404,
-        {'requested_url': request.url, 'available_endpoints': ['/health', '/score/detailed', '/score/simple', '/feedback', '/transcript/<video_id>', '/audit', '/coach/analyze', '/coach/stats/<session_id>', '/librarian/index', '/librarian/search', '/librarian/video/<video_id>', '/librarian/stats']}
+        {'requested_url': request.url, 'available_endpoints': ['/health', '/score', '/feedback', '/transcript/<video_id>', '/audit', '/coach/analyze', '/coach/stats/<session_id>', '/librarian/index', '/librarian/search', '/librarian/video/<video_id>', '/librarian/stats', '/librarian/save', '/librarian/save_summary', '/librarian/summaries']}
     )
 
 # 405 handler for method not allowed

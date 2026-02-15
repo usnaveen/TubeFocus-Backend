@@ -6,6 +6,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.vector import Vector
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 from config import Config
+from librarian_graph import LibrarianGraph
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -110,6 +111,203 @@ class LibrarianAgent:
             logger.error(f"Failed to index video {video_id}: {str(e)}")
             return False
 
+    def save_video_item(self, video_id, title, user_goal, score=100, video_url="", transcript="", description=""):
+        """
+        Unified save behavior:
+        1) If transcript exists, save as transcript-backed entry.
+        2) Otherwise, save link + user description.
+        """
+        if not self.db or not self.client:
+            return {"success": False, "error": "Librarian unavailable", "save_mode": None}
+
+        transcript = (transcript or "").strip()
+        description = (description or "").strip()
+
+        try:
+            if transcript:
+                storage_video_id = f"saved_{video_id}"
+                metadata = {
+                    "type": "saved_video",
+                    "save_mode": "transcript",
+                    "manual_save": True,
+                    "video_url": video_url,
+                    "description": description,
+                    "original_video_id": video_id
+                }
+                success = self.index_video(
+                    video_id=storage_video_id,
+                    title=title,
+                    transcript=transcript,
+                    goal=user_goal,
+                    score=score,
+                    metadata=metadata
+                )
+                return {"success": success, "save_mode": "transcript"}
+
+            if not description:
+                return {
+                    "success": False,
+                    "error": "description is required when transcript is unavailable",
+                    "save_mode": None
+                }
+
+            rich_text = (
+                f"Saved video link\n"
+                f"Title: {title}\n"
+                f"Description: {description}\n"
+                f"Goal: {user_goal}\n"
+                f"URL: {video_url}"
+            )
+            embedding = self._get_embedding(rich_text)
+            if not embedding:
+                return {"success": False, "error": "embedding generation failed", "save_mode": None}
+
+            doc_ref = self.db.collection(self.collection_name).document(f"saved_link_{video_id}")
+            doc_ref.set({
+                "video_id": f"saved_link_{video_id}",
+                "original_video_id": video_id,
+                "title": title,
+                "goal": user_goal,
+                "score": float(score),
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "indexed_at": datetime.now().isoformat(),
+                "text": rich_text,
+                "embedding": Vector(embedding),
+                "type": "saved_video",
+                "save_mode": "link_only",
+                "manual_save": True,
+                "description": description,
+                "video_url": video_url
+            })
+            return {"success": True, "save_mode": "link_only"}
+
+        except Exception as e:
+            logger.error(f"Failed to save video item {video_id}: {e}")
+            return {"success": False, "error": str(e), "save_mode": None}
+
+    def save_video_summary(self, video_id, title, user_goal, summary, preset="youtube_ask", video_url=""):
+        """Persist summary text to Firestore with embeddings."""
+        if not self.db or not self.client:
+            return {"success": False, "error": "Librarian unavailable"}
+
+        try:
+            embed_text = f"Summary for {title}\nGoal: {user_goal}\n{summary}"
+            embedding = self._get_embedding(embed_text)
+            if not embedding:
+                return {"success": False, "error": "embedding generation failed"}
+
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            doc_ref = self.db.collection(self.collection_name).document(f"summary_{video_id}_{timestamp}")
+            doc_ref.set({
+                "video_id": f"summary_{video_id}",
+                "original_video_id": video_id,
+                "title": title,
+                "goal": user_goal,
+                "score": 100.0,
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "indexed_at": datetime.now().isoformat(),
+                "text": summary,
+                "summary": summary,
+                "summary_preset": preset,
+                "video_url": video_url,
+                "type": "video_summary",
+                "embedding": Vector(embedding)
+            })
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"Failed to save summary for {video_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_saved_videos(self, limit=50):
+        """Retrieve saved videos with deduped entries for UI listing."""
+        if not self.db: return []
+        
+        try:
+            docs = self.db.collection(self.collection_name)\
+                .where(filter=firestore.FieldFilter("type", "==", "saved_video"))\
+                .order_by("indexed_at", direction=firestore.Query.DESCENDING)\
+                .limit(max(limit * 8, 100))\
+                .stream()
+
+            by_video = {}
+            for doc in docs:
+                data = doc.to_dict()
+                original_video_id = data.get('original_video_id') or data.get('video_id', '')
+                if not original_video_id:
+                    continue
+
+                if original_video_id in by_video:
+                    continue
+
+                stored_video_id = data.get('video_id', '')
+                video_url = data.get('video_url')
+                if not video_url and original_video_id and not str(original_video_id).startswith(('saved_', 'saved_link_')):
+                    video_url = f"https://youtube.com/watch?v={original_video_id}"
+
+                by_video[original_video_id] = {
+                    'video_id': original_video_id,
+                    'stored_video_id': stored_video_id,
+                    'title': data.get('title', 'Untitled Video'),
+                    'goal': data.get('goal'),
+                    'score': data.get('score'),
+                    'indexed_at': data.get('indexed_at'),
+                    'save_mode': data.get('save_mode', 'transcript'),
+                    'description': data.get('description', ''),
+                    'video_url': video_url,
+                    # Keep compatibility with existing dashboard rendering.
+                    'note': data.get('description', '')
+                }
+
+                if len(by_video) >= limit:
+                    break
+
+            return list(by_video.values())
+        except Exception as e:
+            logger.error(f"Failed to get saved videos: {e}")
+            return []
+
+    def get_saved_summaries(self, limit=50):
+        """Retrieve generated video summaries."""
+        if not self.db: return []
+
+        try:
+            docs = self.db.collection(self.collection_name)\
+                .where(filter=firestore.FieldFilter("type", "==", "video_summary"))\
+                .order_by("indexed_at", direction=firestore.Query.DESCENDING)\
+                .limit(limit)\
+                .stream()
+
+            return [doc.to_dict() for doc in docs]
+        except Exception as e:
+            logger.error(f"Failed to get saved summaries: {e}")
+            return []
+
+    def get_all_highlights(self, limit=50):
+        """Retrieve recent highlights across all videos."""
+        if not self.db: return []
+        
+        try:
+            # Assuming highlights are stored in a separate collection or mixed in 'video_content'
+            # If they are in 'video_content', they should have type='highlight' (if we designed it that way)
+            # Or if they are in a separate collection 'highlights'. 
+            # Looking at api.py, it imports 'get_highlights_for_video' from 'firestore_service'.
+            # Let's check firestore_service.py to be sure where highlights live.
+            # Assuming for now we can query the 'highlights' collection if it exists
+            # OR we effectively query key insights.
+            
+            # Use the 'highlights' collection if it exists, otherwise return empty
+            docs = self.db.collection('highlights')\
+                .order_by("created_at", direction=firestore.Query.DESCENDING)\
+                .limit(limit)\
+                .stream()
+            
+            return [doc.to_dict() for doc in docs]
+        except Exception as e:
+            logger.error(f"Failed to get all highlights: {e}")
+            return []
+
     def search_history(self, query, n_results=5, goal_filter=None):
         """Semantic search using Firestore Vector Search."""
         if not self.db or not self.client:
@@ -143,7 +341,7 @@ class LibrarianAgent:
                     continue
                     
                 formatted_results.append({
-                    'video_id': data.get('video_id'),
+                    'video_id': data.get('original_video_id', data.get('video_id')),
                     'title': data.get('title'),
                     'goal': data.get('goal'),
                     'score': data.get('score'),
@@ -196,34 +394,24 @@ class LibrarianAgent:
         return {'status': 'connected', 'backend': 'firestore'}
 
     def chat(self, query):
-        """RAG Chat Implementation."""
+        """RAG Chat Implementation using LangGraph."""
         if not self.client:
              return {"answer": "Missing Google API Key.", "sources": []}
              
-        search_res = self.search_history(query, n_results=5)
-        context_docs = search_res.get('results', [])
-        
-        if not context_docs:
-            return {"answer": "I couldn't find relevant info in your library.", "sources": []}
-            
-        context_str = "\n\n".join([f"Source (Video: {d['title']}): {d['snippet']}" for d in context_docs])
-        sources = [{"title": d['title'], "video_id": d['video_id']} for d in context_docs]
-        
-        prompt = f"""You are the TubeFocus Librarian.
-        User Query: {query}
-        Context:
-        {context_str}
-        Answer based on context:"""
-        
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.0-flash-exp',
-                contents=prompt
-            )
-            return {"answer": response.text, "sources": sources}
+            # Delegate to LangGraph Workflow
+            graph = LibrarianGraph(self)
+            result = graph.invoke(query)
+
+            # Deduplicate sources
+            if 'sources' in result:
+                unique_sources = {s['title']: s for s in result['sources'] if 'title' in s}
+                result['sources'] = list(unique_sources.values())
+
+            return result
         except Exception as e:
             logger.error(f"Chat failed: {e}")
-            return {"answer": "Error processing chat.", "sources": sources}
+            return {"answer": "Error processing chat via LangGraph.", "sources": []}
 
     def _chunk_transcript(self, transcript, chunk_size=500):
         return [transcript[i:i+chunk_size] for i in range(0, len(transcript), chunk_size)]

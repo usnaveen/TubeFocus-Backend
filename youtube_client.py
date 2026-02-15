@@ -6,6 +6,7 @@ from config import Config
 
 YOUTUBE_VIDEO_URL = 'https://www.googleapis.com/youtube/v3/videos'
 YOUTUBE_CATEGORY_URL = 'https://www.googleapis.com/youtube/v3/videoCategories'
+YOUTUBE_COMMENT_THREADS_URL = 'https://www.googleapis.com/youtube/v3/commentThreads'
 
 def extract_video_id(url_or_id: str) -> str:
     """
@@ -62,3 +63,41 @@ def get_category_name(category_id: str):
     category_name = data['items'][0]['snippet']['title']
 
     return category_name
+
+def get_video_comments(video_url_or_id: str, max_results: int = 20):
+    """
+    Fetch top comments for a video.
+    Returns a list of comment text snippets.
+    """
+    try:
+        video_id = extract_video_id(video_url_or_id)
+        print(f"Fetching comments from API for {video_id}")
+        
+        params = {
+            'part': 'snippet',
+            'videoId': video_id,
+            'maxResults': max_results,
+            'order': 'relevance',  # Get top comments
+            'textFormat': 'plainText',
+            'key': Config.YOUTUBE_API_KEY
+        }
+        
+        resp = requests.get(YOUTUBE_COMMENT_THREADS_URL, params=params)
+        
+        if resp.status_code != 200:
+            print(f"Error fetching comments: {resp.status_code} - {resp.text}")
+            return []
+            
+        data = resp.json()
+        comments = []
+        
+        if 'items' in data:
+            for item in data['items']:
+                comment = item['snippet']['topLevelComment']['snippet']['textDisplay']
+                comments.append(comment)
+                
+        return comments
+        
+    except Exception as e:
+        print(f"Failed to get comments: {e}")
+        return []
