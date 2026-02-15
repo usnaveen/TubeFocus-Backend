@@ -2,34 +2,11 @@ import os
 import re
 import json
 import requests
-import redis
-from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD, REDIS_USERNAME, CACHE_TTL_SECONDS
-
-
-YT_API_KEY = os.environ.get('YOUTUBE_API_KEY')
+from config import Config
 
 YOUTUBE_VIDEO_URL = 'https://www.googleapis.com/youtube/v3/videos'
 YOUTUBE_CATEGORY_URL = 'https://www.googleapis.com/youtube/v3/videoCategories'
-
-redis_client = None # Initialize to None
-
-def initialize_redis_client():
-    global redis_client
-    if redis_client is not None: # Already initialized
-        return redis_client
-    try:
-        client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, username=REDIS_USERNAME, password=REDIS_PASSWORD, ssl=False, decode_responses=True)
-        client.ping()
-        print("Successfully connected to Redis.")
-        redis_client = client
-        return client
-    except redis.exceptions.ConnectionError as e:
-        print(f"Could not connect to Redis: {e}")
-        redis_client = None
-        return None
-
-# Initialize Redis client when the module is imported
-initialize_redis_client()
+YOUTUBE_COMMENT_THREADS_URL = 'https://www.googleapis.com/youtube/v3/commentThreads'
 
 def extract_video_id(url_or_id: str) -> str:
     """
@@ -47,20 +24,13 @@ def extract_video_id(url_or_id: str) -> str:
 
 def get_video_details(video_url_or_id: str):
     video_id = extract_video_id(video_url_or_id)
-    cache_key = f"youtube:video_details:{video_id}"
-
-    # Check cache first
-    if redis_client:
-        cached_data = redis_client.get(cache_key)
-        if cached_data:
-            print(f"Cache hit for video details {video_id}")
-            return json.loads(cached_data)
-
-    print(f"Cache miss for video details {video_id}, fetching from API.")
+    
+    # Direct API fetch - No caching (Redis removed)
+    print(f"Fetching video details from API for {video_id}")
     params = {
         'part': 'snippet',
         'id': video_id,
-        'key': YT_API_KEY
+        'key': Config.YOUTUBE_API_KEY
     }
     resp = requests.get(YOUTUBE_VIDEO_URL, params=params)
     data = resp.json()
@@ -76,28 +46,15 @@ def get_video_details(video_url_or_id: str):
         'category': category_name
     }
 
-    # Store in cache
-    if redis_client:
-        data_to_cache = json.dumps(details)
-        redis_client.setex(cache_key, CACHE_TTL_SECONDS, data_to_cache)
-
     return details
 
 def get_category_name(category_id: str):
-    cache_key = f"youtube:category_name:{category_id}"
-
-    # Check cache first
-    if redis_client:
-        cached_data = redis_client.get(cache_key)
-        if cached_data:
-            print(f"Cache hit for category {category_id}")
-            return json.loads(cached_data)
-
-    print(f"Cache miss for category {category_id}, fetching from API.")
+    # Direct API fetch - No caching (Redis removed)
+    print(f"Fetching category name from API for {category_id}")
     params = {
         'part': 'snippet',
         'id': category_id,
-        'key': YT_API_KEY
+        'key': Config.YOUTUBE_API_KEY
     }
     resp = requests.get(YOUTUBE_CATEGORY_URL, params=params)
     data = resp.json()
@@ -105,9 +62,42 @@ def get_category_name(category_id: str):
         return ''
     category_name = data['items'][0]['snippet']['title']
 
-    # Store in cache
-    if redis_client:
-        data_to_cache = json.dumps(category_name)
-        redis_client.setex(cache_key, CACHE_TTL_SECONDS, data_to_cache)
-
     return category_name
+
+def get_video_comments(video_url_or_id: str, max_results: int = 20):
+    """
+    Fetch top comments for a video.
+    Returns a list of comment text snippets.
+    """
+    try:
+        video_id = extract_video_id(video_url_or_id)
+        print(f"Fetching comments from API for {video_id}")
+        
+        params = {
+            'part': 'snippet',
+            'videoId': video_id,
+            'maxResults': max_results,
+            'order': 'relevance',  # Get top comments
+            'textFormat': 'plainText',
+            'key': Config.YOUTUBE_API_KEY
+        }
+        
+        resp = requests.get(YOUTUBE_COMMENT_THREADS_URL, params=params)
+        
+        if resp.status_code != 200:
+            print(f"Error fetching comments: {resp.status_code} - {resp.text}")
+            return []
+            
+        data = resp.json()
+        comments = []
+        
+        if 'items' in data:
+            for item in data['items']:
+                comment = item['snippet']['topLevelComment']['snippet']['textDisplay']
+                comments.append(comment)
+                
+        return comments
+        
+    except Exception as e:
+        print(f"Failed to get comments: {e}")
+        return []

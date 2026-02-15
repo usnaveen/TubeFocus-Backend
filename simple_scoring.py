@@ -1,195 +1,164 @@
-# simple_scoring.py
-# Simplified scoring using 5 sentence transformers (similar to Docker container approach)
-
-from sentence_transformers import SentenceTransformer, util
-import torch
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from youtube_client import get_video_details
 import os
-import re
-import nltk
-from nltk.tokenize import sent_tokenize
+from google import genai
 import logging
-
-# Download required NLTK data
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    try:
-        nltk.download('punkt')
-    except:
-        print("⚠️  NLTK download failed, using fallback sentence splitting")
+import json
+from youtube_client import get_video_details
+from config import Config
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration
-MIN_SENTENCE_LENGTH = 8  # Minimum sentence length for cleaning
+# Configure API
+if not Config.GOOGLE_API_KEY:
+    logger.warning("GOOGLE_API_KEY not found in environment variables. Scoring will fail.")
 
-# --- Text Cleaning Functions ---
-def clean_text_basic(text: str) -> str:
-    """Basic text cleaning without over-filtering."""
-    if not text:
-        return ""
+def _get_scoring_prompt(title, description, goal, intent=None, transcript=""):
+    transcript_section = ""
+    if transcript:
+        # We limit transcript to ~2000 chars to avoid hitting token limits while keeping context
+        transcript_section = f"\n\nVideo Transcript (excerpt):\n{transcript[:2000]}..."
 
-    # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text)
-    # Remove excessive punctuation
-    text = re.sub(r'[!]{2,}', '!', text)
-    text = re.sub(r'[?]{2,}', '?', text)
-    text = re.sub(r'[.]{3,}', '...', text)
-    return text.strip()
+    intent_section = ""
+    if intent:
+         intent_section = f"""
+User Intent: {intent.get('intent', 'General Learning')}
+Constraints: {intent.get('constraints', '')}
+Note: Strict adherence to these constraints is required.
+"""
 
-def extract_meaningful_content(description: str) -> str:
+    return f"""You are an expert productivity assistant helping a user decide if a YouTube video is worth watching based on their specific goal.
+
+Video Title: {title}
+Video Description: {description[:1000]}... (truncated){transcript_section}
+
+User's Goal: {goal}
+{intent_section}
+
+Task: Rate the relevance of this video to the user's goal on a scale of 0 to 100. 
+- 0 means completely irrelevant.
+- 100 means perfectly aligned and essential.
+- Consider if the video actually teaches what is needed or just discusses it.
+- If the title is vague but the transcript confirms relevance, score high.
+- If the title is clickbait and transcript is irrelevant, score low.
+- If the User Intent is strict (e.g. Exam Prep), penalize entertainment, tangents, or history heavily.
+
+Respond with valid JSON only:
+{{
+  "score": <integer_0_to_100>,
+  "reasoning": "<short_explanation>"
+}}
+"""
+
+def compute_simple_score(video_url: str, goal: str, transcript: str = "", intent=None, blocked_channels=None, video_details=None) -> tuple:
     """
-    Extract meaningful content from description with minimal filtering.
-    The key insight: Don't over-filter! Let the semantic models decide relevance.
+    Scores a video using Google's Gemini API, respecting Intent and Channel Blocks.
+    Returns: (score, reasoning, debug_info)
     """
-    if not description.strip():
-        return ""
+    if not Config.GOOGLE_API_KEY:
+        logger.error("Attempted to score without GOOGLE_API_KEY")
+        raise RuntimeError("GOOGLE_API_KEY is missing. Please set it in your environment.")
 
-    # Split into sentences
-    try:
-        sentences = sent_tokenize(description)
-    except:
-        # Fallback splitting
-        sentences = re.split(r'[.!?]+', description)
-
-    meaningful_sentences = []
-
-    for sentence in sentences:
-        cleaned = clean_text_basic(sentence)
-
-        # Only filter out obvious junk
-        if (len(cleaned) < MIN_SENTENCE_LENGTH or
-            re.match(r'^[\W\d]*$', cleaned) or  # Only symbols/numbers
-            cleaned.lower() in ['', 'n/a', 'none', 'null']):
-            continue
-
-        # Keep URLs if they seem educational (e.g., course links)
-        if 'http' in cleaned.lower():
-            if any(edu_term in cleaned.lower() for edu_term in
-                   ['course', 'lecture', 'edu', 'mit', 'stanford', 'university', 'tutorial']):
-                meaningful_sentences.append(cleaned)
-            # Skip other URLs
-            continue
-
-        # Keep everything else - let semantic scoring decide relevance
-        meaningful_sentences.append(cleaned)
-
-    logger.info(f"Extracted {len(meaningful_sentences)} meaningful sentences from description")
-    return " ".join(meaningful_sentences)
-
-# Define the paths to the 5 sentence transformer models
-SIMPLE_MODEL_PATHS = [
-    "models/sentence-transformers_all-MiniLM-L6-v2",
-    "models/sentence-transformers_multi-qa-MiniLM-L6-cos-v1",
-    "models/sentence-transformers_paraphrase-MiniLM-L3-v2",
-    "models/sentence-transformers_all-mpnet-base-v2",
-    "models/sentence-transformers_all-distilroberta-v1"
-]
-
-# Torch/Tokenizers tuning for latency
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-# Avoid oversubscribing CPU threads when we parallelize across models
-try:
-    torch.set_num_threads(1)
-except Exception:
-    pass
-
-# Load all models from the local paths just once when the application starts
-try:
-    print("Loading simple scoring models from local directories...")
-    simple_models = {
-        path: SentenceTransformer(path)
-        for path in SIMPLE_MODEL_PATHS
-    }
-    print(f"Successfully loaded {len(simple_models)} simple scoring models.")
-except Exception as e:
-    print(f"FATAL: Error loading simple scoring models: {e}")
-    simple_models = {}
-
-
-def _score_with_model(model: SentenceTransformer, text_to_embed: str, goal: str) -> int:
-    """Run a single model inference and return 0-100 score.
-
-    Uses batched encode([text, goal]) to minimize per-call overhead.
-    """
-    # Encode both strings in a single forward pass for this model
-    embeddings = model.encode([text_to_embed, goal], convert_to_tensor=True)
-    vec_text, vec_goal = embeddings[0], embeddings[1]
-    cos_sim = util.cos_sim(vec_text, vec_goal).item()
-    pct_score = max(0, min(100, int((cos_sim + 1) * 50)))
-    return pct_score
-
-
-def _calculate_simple_score_from_text(text_to_embed: str, goal: str) -> int:
-    """
-    Computes embeddings for the given text and goal, calculates their
-    cosine similarity, and returns a score from 0 to 100.
-    Uses the same approach as the Docker container.
-    """
-    if not simple_models:
-        raise RuntimeError("Simple scoring models are not loaded, cannot compute score.")
-
-    scores = []
-
-    # Run each model in parallel threads; each model uses 1 intra-op thread
-    # Choose a safe worker count based on available CPUs
-    max_workers = min(len(simple_models), max(1, (os.cpu_count() or 4)))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_score_with_model, model, text_to_embed, goal)
-                   for _, model in simple_models.items()]
-        for fut in as_completed(futures):
-            try:
-                scores.append(fut.result())
-            except Exception as e:
-                logger.warning(f"Simple model failed during scoring: {e}")
-
-    if not scores:
-        return 0
-    
-    return int(round(sum(scores) / len(scores)))
-
-
-def compute_simple_score(video_url: str, goal: str) -> int:
-    """
-    Fetches video metadata (title and description) and calculates a
-    relevance score based on the provided goal using simplified approach.
-    """
-    details = get_video_details(video_url)
+    # Fetch details if not provided
+    details = video_details if video_details else get_video_details(video_url)
     if not details:
         raise ValueError(f"Could not retrieve details for video {video_url}")
-    text_to_embed = f"{details['title']}\n\n{details['description']}"
-    final_score = _calculate_simple_score_from_text(text_to_embed, goal)
-    print(f"Simple Score - URL: {video_url}, Goal: '{goal}', Final Score: {final_score}")
-    return final_score
+    
+    title = details.get('title', '')
+    description = details.get('description', '')
+    channel_title = details.get('channelTitle', '')
+    category_id = details.get('categoryId') # Need to ensure youtube_client returns this
 
+    # --- 1. Fast Block Checks ---
+    # Channel Block
+    if blocked_channels and channel_title in blocked_channels:
+        return 0, f"Blocked Channel: {channel_title}", {'status': 'blocked', 'reason': 'channel_block'}
+
+    # Category Block
+    # 10=Music, 20=Gaming, 23=Comedy, 24=Entertainment
+    BANNED_CATEGORIES = ['10', '20', '23', '24']
+    ignored_categories = set(BANNED_CATEGORIES)
+    
+    if intent:
+         if intent.get('intent') == 'Infotainment/Chill':
+             ignored_categories = {'10'} 
+         elif intent.get('intent') == 'Game Dev' or 'Game' in goal:
+             ignored_categories.discard('20')
+
+    if category_id and str(category_id) in ignored_categories:
+        return 5, f"Distracting Category ({category_id}) for {intent.get('intent') if intent else 'current goal'}", {'status': 'blocked', 'reason': 'category_block'}
+
+
+    # --- Debug Info Return ---
+    # FIXED: Use details.get('id') instead of undefined video_id
+    debug_info = {
+         'youtube_api': {
+             'status': 'success' if title else 'failed',
+             'video_id': details.get('id', 'unknown'), 
+             'title': title,
+             'description_length': len(description),
+             'transcript_length': len(transcript)
+         },
+         'gemini_api': {
+             'model': 'gemini-2.0-flash',
+             'status': 'pending'
+         }
+    }
+
+    try:
+        current_key = Config.GOOGLE_API_KEY or 'NONE'
+        logger.info(f"DEBUG: Using Google API Key: {current_key[:10]}..." if current_key != 'NONE' else "DEBUG: No API key configured")
+        
+        client = genai.Client(api_key=Config.GOOGLE_API_KEY)
+        client = genai.Client(api_key=Config.GOOGLE_API_KEY)
+        prompt = _get_scoring_prompt(title, description, goal, intent, transcript)
+        
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=prompt
+        )
+        
+        # Parse JSON from response
+        text_response = response.text.strip()
+        # Handle potential markdown wrapping
+        if text_response.startswith('```json'):
+            text_response = text_response.replace('```json', '').replace('```', '')
+        elif text_response.startswith('```'):
+             text_response = text_response.replace('```', '')
+
+        result = json.loads(text_response)
+        score = int(result.get('score', 0))
+        reasoning = result.get('reasoning', '')
+        
+        logger.info(f"Scored {video_url} against '{goal}': {score} (Reason: {reasoning})")
+        debug_info['gemini_api']['status'] = 'success'
+        debug_info['gemini_api']['raw_response'] = text_response
+        
+        return score, reasoning, debug_info
+        
+    except Exception as e:
+        debug_info['gemini_api']['status'] = 'failed'
+        debug_info['gemini_api']['error'] = str(e)
+        logger.error(f"GenAI Scoring failed: {e}")
+        # Attach debug info to exception so api.py can retrieve it
+        e.debug_info = debug_info
+        raise e
+
+# Compatibility aliases - these just call the main function and ignore extra returns if not needed
+# But api.py expects them to return (score) or (score, reasoning, debug) depending on usage.
+# To be safe, let's make them return the full tuple since we updated api.py to handle it for the main path.
+# Actually, looking at api.py, it only unpacks the main function call. The alias calls are inside specific 'if mode ==' blocks.
+# We should probably update them to match signature or update api.py. 
+# For now, let's keep them returning just score if that's what legacy expected, 
+# BUT api.py logic for "title_only" etc might break if it expects a tuple now?
+# Checking api.py content from memory/logs:
+# if mode == "title_only": score = ...; debug_info = {}
+# So these functions should return just valid score/int.
 
 def compute_simple_score_from_title(video_url: str, goal: str) -> int:
-    """
-    Fetches video metadata (title only) and calculates a relevance score
-    based on the provided goal using simplified approach.
-    """
-    details = get_video_details(video_url)
-    if not details:
-        raise ValueError(f"Could not retrieve details for video {video_url}")
-    final_score = _calculate_simple_score_from_text(details['title'], goal)
-    print(f"Simple Title Score - URL: {video_url}, Goal: '{goal}', Title-Only Score: {final_score}")
-    return final_score
-
+    score, _, _ = compute_simple_score(video_url, goal)
+    return score
 
 def compute_simple_score_title_and_clean_desc(video_url: str, goal: str) -> int:
-    """
-    Fetches video metadata (title and cleaned description) and calculates a relevance score
-    based on the provided goal using simplified approach.
-    """
-    details = get_video_details(video_url)
-    if not details:
-        raise ValueError(f"Could not retrieve details for video {video_url}")
-    cleaned_desc = extract_meaningful_content(details['description'])
-    text_to_embed = f"{details['title']}. {cleaned_desc}" if cleaned_desc else details['title']
-    final_score = _calculate_simple_score_from_text(text_to_embed, goal)
-    print(f"Simple Title+CleanDesc Score - URL: {video_url}, Goal: '{goal}', Score: {final_score}")
-    return final_score
+    score, _, _ = compute_simple_score(video_url, goal)
+    return score
