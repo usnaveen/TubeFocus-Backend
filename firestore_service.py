@@ -97,7 +97,7 @@ def save_highlight(highlight: Dict) -> Optional[str]:
     
     try:
         # Ensure required fields
-        if not highlight.get('video_id') or not highlight.get('timestamp'):
+        if not highlight.get('video_id') or highlight.get('timestamp') is None:
             raise ValueError("video_id and timestamp are required")
         
         # Add metadata

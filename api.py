@@ -12,7 +12,6 @@ from scoring_modules import score_description, score_title, score_tags, score_ca
 from data_manager import save_feedback, load_feedback
 from simple_scoring import compute_simple_score, compute_simple_score_from_title, compute_simple_score_title_and_clean_desc
 from transcript_service import get_transcript, get_transcript_excerpt
-from auditor_agent import get_auditor_agent
 from coach_agent import get_coach_agent
 from librarian_agent import get_librarian_agent
 from navigator_agent import get_navigator_agent
@@ -230,7 +229,6 @@ def score_endpoint():
         data = request.get_json(force=True)
         video_url = data.get('video_url')
         goal = data.get('goal')
-        goal = data.get('goal')
         mode = data.get('mode', 'title_and_description')  # Default to "title_and_description"
         transcript = data.get('transcript', '')
 
@@ -356,81 +354,6 @@ def score_endpoint():
 
 
 
-
-@app.route('/audit', methods=['POST'])
-def audit_video():
-    """
-    Auditor Agent endpoint - Content verification and clickbait detection.
-    POST /audit
-    Body: {
-        "video_id": "...",
-        "title": "...",
-        "description": "...",
-        "goal": "..."
-    }
-    """
-    require_api_key()
-    try:
-        data = request.get_json(force=True)
-        video_id = data.get('video_id')
-        title = data.get('title')
-        description = data.get('description', '')
-        goal = data.get('goal')
-        transcript = data.get('transcript')  # Optional
-        
-        # Validate required fields
-        if not video_id:
-            return create_error_response(
-                APIErrorCodes.MISSING_REQUIRED_FIELDS,
-                "video_id is required",
-                400,
-                {'missing_field': 'video_id'}
-            )
-        
-        if not title:
-            return create_error_response(
-                APIErrorCodes.MISSING_REQUIRED_FIELDS,
-                "title is required",
-                400,
-                {'missing_field': 'title'}
-            )
-        
-        if not goal:
-            return create_error_response(
-                APIErrorCodes.MISSING_REQUIRED_FIELDS,
-                "goal is required",
-                400,
-                {'missing_field': 'goal'}
-            )
-        
-        # Get Auditor Agent instance
-        auditor = get_auditor_agent()
-        
-        # Perform autonomous analysis
-        logger.info(f"Auditor analyzing video: {video_id} for goal: {goal}")
-        analysis = auditor.analyze_content(
-            video_id=video_id,
-            title=title,
-            description=description,
-            goal=goal
-        )
-        
-        # Return analysis results
-        return jsonify({
-            'success': True,
-            'video_id': video_id,
-            'analysis': analysis,
-            'timestamp': __import__('datetime').datetime.now().isoformat()
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"/audit error: {e}", exc_info=True)
-        return create_error_response(
-            APIErrorCodes.INTERNAL_ERROR,
-            "Auditor analysis failed",
-            500,
-            {'error_details': str(e)}
-        )
 
 @app.route('/coach/analyze', methods=['POST'])
 def coach_analyze():
@@ -583,15 +506,17 @@ def librarian_index():
         # Get Librarian Agent instance
         librarian = get_librarian_agent()
         
-        # Index the video
+        # Index the video (pass segments for hierarchical chunking)
         logger.info(f"Librarian indexing video: {video_id}")
+        segments = data.get('segments')  # timestamped transcript segments
         success = librarian.index_video(
             video_id=video_id,
             title=title,
             transcript=transcript,
             goal=goal,
             score=score,
-            metadata=metadata
+            metadata=metadata,
+            segments=segments
         )
         
         if success:
@@ -730,12 +655,13 @@ def librarian_chat():
     """
     Librarian Agent endpoint - RAG Chat.
     POST /librarian/chat
-    Body: { "query": "..." }
+    Body: { "query": "...", "focus_video_id": "..." (optional) }
     """
     require_api_key()
     try:
         data = request.get_json(force=True)
         query = data.get('query')
+        focus_video_id = data.get('focus_video_id')
         
         if not query:
             return create_error_response(
@@ -746,7 +672,7 @@ def librarian_chat():
             )
             
         librarian = get_librarian_agent()
-        response = librarian.chat(query)
+        response = librarian.chat(query, focus_video_id=focus_video_id)
         
         return jsonify({
             'success': True,
@@ -1172,7 +1098,8 @@ def librarian_save_item():
             score=score,
             video_url=video_url,
             transcript=transcript,
-            description=description
+            description=description,
+            segments=data.get('segments')  # timestamped segments for hierarchical chunking
         )
 
         if result.get('success'):
@@ -1301,7 +1228,7 @@ def not_found(error):
         APIErrorCodes.INTERNAL_ERROR,
         "Endpoint not found",
         404,
-        {'requested_url': request.url, 'available_endpoints': ['/health', '/score', '/feedback', '/transcript/<video_id>', '/audit', '/coach/analyze', '/coach/stats/<session_id>', '/librarian/index', '/librarian/search', '/librarian/video/<video_id>', '/librarian/stats', '/librarian/save', '/librarian/save_summary', '/librarian/summaries']}
+        {'requested_url': request.url, 'available_endpoints': ['/health', '/score', '/feedback', '/transcript/<video_id>', '/coach/analyze', '/librarian/index', '/librarian/search', '/librarian/video/<video_id>', '/librarian/stats', '/librarian/save', '/librarian/save_summary', '/librarian/summaries', '/highlights']}
     )
 
 # 405 handler for method not allowed

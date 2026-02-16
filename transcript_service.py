@@ -1,10 +1,29 @@
 import logging
+import time
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Layer 4: Transcript Cache — avoids re-fetching from YouTube API
+_transcript_cache = {}  # {video_id: (result_dict, timestamp)}
+_TRANSCRIPT_CACHE_TTL = 1800  # 30 minutes
+
+def _get_cached_transcript(video_id):
+    """Return cached transcript if available and fresh."""
+    if video_id in _transcript_cache:
+        result, ts = _transcript_cache[video_id]
+        if time.time() - ts < _TRANSCRIPT_CACHE_TTL:
+            logger.info(f"Transcript cache hit for {video_id}")
+            return result
+        del _transcript_cache[video_id]
+    return None
+
+def _cache_transcript(video_id, result):
+    """Store transcript result in cache."""
+    _transcript_cache[video_id] = (result, time.time())
 
 def extract_video_id(url_or_id):
     """Extract video ID from URL or return ID if already extracted."""
@@ -24,6 +43,7 @@ def extract_video_id(url_or_id):
 def get_transcript(video_id, languages=['en', 'en-US', 'en-GB']):
     """
     Fetch transcript for a YouTube video using the OLD stable API.
+    Results are cached in-memory (Layer 4) to avoid redundant YouTube API calls.
     
     This uses YouTubeTranscriptApi.get_transcript() which works on ALL versions
     including old ones that don't have list_transcripts().
@@ -44,6 +64,11 @@ def get_transcript(video_id, languages=['en', 'en-US', 'en-GB']):
     try:
         video_id = extract_video_id(video_id)
         
+        # Check transcript cache (Layer 4)
+        cached = _get_cached_transcript(video_id)
+        if cached:
+            return cached
+        
         # Use OLD stable API: get_transcript(video_id, languages)
         # This works on ALL versions of youtube-transcript-api
         segments = YouTubeTranscriptApi.get_transcript(
@@ -60,13 +85,15 @@ def get_transcript(video_id, languages=['en', 'en-US', 'en-GB']):
         
         logger.info(f"Successfully fetched transcript for {video_id}")
         
-        return {
+        result = {
             'transcript': full_text,
             'segments': segments,
             'language': language,
             'is_generated': None,  # Old API doesn't provide this
             'error': None
         }
+        _cache_transcript(video_id, result)
+        return result
         
     except TranscriptsDisabled:
         logger.error(f"Transcripts are disabled for video {video_id}")
