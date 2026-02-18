@@ -118,6 +118,12 @@ CORS(app, resources={r"/*": {"origins": "*"}}, methods=["GET", "POST", "OPTIONS"
 
 @app.after_request
 def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY')
+    return response
+
+@app.after_request
+def after_request(response):
     """Ensure CORS headers are present on all responses, including errors."""
     response.headers.add('Access-Control-Allow-Origin', '*')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY')
