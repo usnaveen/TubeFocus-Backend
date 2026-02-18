@@ -102,8 +102,9 @@ class LibrarianAgent:
     def _compute_embedding(self, text, task_type='RETRIEVAL_DOCUMENT'):
         """Raw embedding API call (uncached)."""
         try:
+            # Use 'models/' prefix to route to stable v1 API (not v1beta)
             result = self.client.models.embed_content(
-                model="text-embedding-004",
+                model="models/text-embedding-004",
                 contents=text,
                 config={'task_type': task_type}
             )
