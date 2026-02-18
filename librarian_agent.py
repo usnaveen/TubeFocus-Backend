@@ -432,9 +432,10 @@ class LibrarianAgent:
         1) If transcript exists, save as transcript-backed entry (with hierarchical chunking if segments available).
         2) Otherwise, save link + user description.
         """
-        if not self.db or not self.client:
+        if not self.db:
             return {"success": False, "error": "Librarian unavailable", "save_mode": None}
 
+        client_available = self.client is not None
         transcript = (transcript or "").strip()
         description = (description or "").strip()
 
@@ -449,16 +450,41 @@ class LibrarianAgent:
                     "description": description,
                     "original_video_id": video_id
                 }
-                success = self.index_video(
-                    video_id=storage_video_id,
-                    title=title,
-                    transcript=transcript,
-                    goal=user_goal,
-                    score=score,
-                    metadata=metadata,
-                    segments=segments  # Pass segments for hierarchical chunking
-                )
-                return {"success": success, "save_mode": "transcript"}
+                if client_available:
+                    success = self.index_video(
+                        video_id=storage_video_id,
+                        title=title,
+                        transcript=transcript,
+                        goal=user_goal,
+                        score=score,
+                        metadata=metadata,
+                        segments=segments  # Pass segments for hierarchical chunking
+                    )
+                    if success:
+                        return {"success": True, "save_mode": "transcript"}
+                    logger.warning(f"Transcript indexing failed for {video_id}; storing metadata-only fallback.")
+
+                # Fallback persistence without embeddings so saved list still works.
+                fallback_ref = self.db.collection(self.collection_name).document(f"saved_meta_{video_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}")
+                fallback_ref.set({
+                    "video_id": storage_video_id,
+                    "original_video_id": video_id,
+                    "title": title,
+                    "goal": user_goal,
+                    "score": float(score),
+                    "chunk_index": 0,
+                    "total_chunks": 1,
+                    "indexed_at": datetime.now().isoformat(),
+                    "text": transcript[:1800],
+                    "type": "saved_video",
+                    "save_mode": "transcript",
+                    "manual_save": True,
+                    "description": description,
+                    "video_url": video_url,
+                    "embedding_missing": True
+                })
+                self._source_card_cache.invalidate(video_id)
+                return {"success": True, "save_mode": "transcript"}
 
             if not description:
                 return {
@@ -474,12 +500,8 @@ class LibrarianAgent:
                 f"Goal: {user_goal}\n"
                 f"URL: {video_url}"
             )
-            embedding = self._get_embedding(rich_text)
-            if not embedding:
-                return {"success": False, "error": "embedding generation failed", "save_mode": None}
-
             doc_ref = self.db.collection(self.collection_name).document(f"saved_link_{video_id}")
-            doc_ref.set({
+            doc_data = {
                 "video_id": f"saved_link_{video_id}",
                 "original_video_id": video_id,
                 "title": title,
@@ -495,7 +517,18 @@ class LibrarianAgent:
                 "manual_save": True,
                 "description": description,
                 "video_url": video_url
-            })
+            }
+            if client_available:
+                embedding = self._get_embedding(rich_text)
+                if embedding:
+                    doc_data["embedding"] = Vector(embedding)
+                else:
+                    doc_data["embedding_missing"] = True
+            else:
+                doc_data["embedding_missing"] = True
+
+            doc_ref.set(doc_data)
+            self._source_card_cache.invalidate(video_id)
             return {"success": True, "save_mode": "link_only"}
 
         except Exception as e:
@@ -504,18 +537,13 @@ class LibrarianAgent:
 
     def save_video_summary(self, video_id, title, user_goal, summary, preset="youtube_ask", video_url=""):
         """Persist summary text to Firestore with embeddings."""
-        if not self.db or not self.client:
+        if not self.db:
             return {"success": False, "error": "Librarian unavailable"}
 
         try:
-            embed_text = f"Summary for {title}\nGoal: {user_goal}\n{summary}"
-            embedding = self._get_embedding(embed_text)
-            if not embedding:
-                return {"success": False, "error": "embedding generation failed"}
-
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             doc_ref = self.db.collection(self.collection_name).document(f"summary_{video_id}_{timestamp}")
-            doc_ref.set({
+            doc_data = {
                 "video_id": f"summary_{video_id}",
                 "original_video_id": video_id,
                 "title": title,
@@ -528,9 +556,21 @@ class LibrarianAgent:
                 "summary": summary,
                 "summary_preset": preset,
                 "video_url": video_url,
-                "type": "video_summary",
-                "embedding": Vector(embedding)
-            })
+                "type": "video_summary"
+            }
+
+            if self.client:
+                embed_text = f"Summary for {title}\nGoal: {user_goal}\n{summary}"
+                embedding = self._get_embedding(embed_text)
+                if embedding:
+                    doc_data["embedding"] = Vector(embedding)
+                else:
+                    doc_data["embedding_missing"] = True
+            else:
+                doc_data["embedding_missing"] = True
+
+            doc_ref.set(doc_data)
+            self._source_card_cache.invalidate(video_id)
             return {"success": True}
         except Exception as e:
             logger.error(f"Failed to save summary for {video_id}: {e}")
@@ -581,6 +621,52 @@ class LibrarianAgent:
 
                 if len(by_video) >= limit:
                     break
+
+            # Legacy fallback: older entries may not have type=saved_video.
+            if not by_video:
+                legacy_docs = self.db.collection(self.collection_name) \
+                    .order_by("indexed_at", direction=firestore.Query.DESCENDING) \
+                    .limit(max(limit * 20, 250)) \
+                    .stream()
+
+                for doc in legacy_docs:
+                    data = doc.to_dict() or {}
+                    raw_video_id = str(data.get('video_id') or '')
+                    is_saved_candidate = (
+                        data.get('manual_save') is True or
+                        data.get('type') in ('saved_video', 'saved_transcript') or
+                        raw_video_id.startswith('saved_') or
+                        raw_video_id.startswith('saved_link_')
+                    )
+                    if not is_saved_candidate:
+                        continue
+
+                    original_video_id = data.get('original_video_id') or self._normalize_original_video_id(raw_video_id)
+                    if not original_video_id or original_video_id in by_video:
+                        continue
+
+                    video_url = data.get('video_url')
+                    if not video_url and original_video_id:
+                        video_url = f"https://youtube.com/watch?v={original_video_id}"
+                    urls = self._youtube_urls(original_video_id, fallback_url=video_url or "")
+
+                    by_video[original_video_id] = {
+                        'video_id': original_video_id,
+                        'stored_video_id': raw_video_id,
+                        'title': data.get('title', 'Untitled Video'),
+                        'goal': data.get('goal'),
+                        'score': data.get('score'),
+                        'indexed_at': data.get('indexed_at'),
+                        'save_mode': data.get('save_mode', 'transcript'),
+                        'description': data.get('description', ''),
+                        'video_url': urls['watch_url'],
+                        'embed_url': urls['embed_url'],
+                        'thumbnail_url': urls['thumbnail_url'],
+                        'note': data.get('description', '')
+                    }
+
+                    if len(by_video) >= limit:
+                        break
 
             return list(by_video.values())
         except Exception as e:
@@ -635,6 +721,52 @@ class LibrarianAgent:
             logger.error(f"Failed to get all highlights: {e}")
             return []
 
+    def _is_highlight_inventory_query(self, query: str) -> bool:
+        text = (query or "").lower()
+        highlight_terms = ("highlight", "highlights", "note", "notes")
+        inventory_terms = ("do i have", "how many", "show", "list", "any", "what are")
+        return any(term in text for term in highlight_terms) and any(term in text for term in inventory_terms)
+
+    def _answer_highlight_inventory(self, query: str, focus_video_id: Optional[str] = None) -> Dict:
+        highlights = self.get_all_highlights(limit=120)
+        if focus_video_id:
+            highlights = [
+                h for h in highlights
+                if self._normalize_original_video_id(h.get('video_id')) == self._normalize_original_video_id(focus_video_id)
+            ]
+
+        if not highlights:
+            if focus_video_id:
+                return {
+                    "answer": "I could not find highlights for that focused video yet.",
+                    "sources": []
+                }
+            return {"answer": "You do not have any saved highlights yet.", "sources": []}
+
+        by_video = {}
+        for item in highlights:
+            vid = self._normalize_original_video_id(item.get('video_id'))
+            if not vid:
+                continue
+            if vid not in by_video:
+                by_video[vid] = []
+            by_video[vid].append(item)
+
+        total = len(highlights)
+        lines = [f"You have {total} saved highlights across {len(by_video)} videos."]
+
+        # Summarize top videos by highlight count.
+        top_videos = sorted(by_video.items(), key=lambda kv: len(kv[1]), reverse=True)[:3]
+        seed_results = []
+        for video_id, items in top_videos:
+            title = items[0].get('video_title') or f"Video {video_id}"
+            lines.append(f"- {title}: {len(items)} highlights")
+            seed_results.append({"video_id": video_id, "title": title})
+
+        answer = "\n".join(lines)
+        cards = self.build_source_cards_from_results(seed_results, focus_video_id=focus_video_id, limit=3)
+        return {"answer": answer, "sources": cards}
+
     def search_history(self, query, n_results=5, goal_filter=None, focus_video_id=None):
         """
         Cascading Multi-Tier Retrieval:
@@ -644,8 +776,11 @@ class LibrarianAgent:
         
         If focus_video_id is set, skips Phase 1 and goes straight into focused retrieval.
         """
-        if not self.db or not self.client:
+        if not self.db:
              return {'query': query, 'results': [], 'error': 'Librarian not initialized'}
+
+        if not self.client:
+            return self._lexical_search_history(query, n_results=n_results, focus_video_id=focus_video_id)
              
         try:
             # Embed query (cached via Layer 2)
@@ -740,6 +875,47 @@ class LibrarianAgent:
             
         except Exception as e:
             logger.error(f"Search failed: {str(e)}")
+            return self._lexical_search_history(query, n_results=n_results, focus_video_id=focus_video_id)
+
+    def _lexical_search_history(self, query, n_results=5, focus_video_id=None):
+        """
+        Fallback retrieval when embeddings are unavailable or vector search fails.
+        """
+        if not self.db:
+            return {'query': query, 'results': [], 'error': 'Librarian not initialized'}
+
+        tokens = [t for t in query.lower().split() if len(t) > 2]
+        focus_norm = self._normalize_original_video_id(focus_video_id) if focus_video_id else None
+
+        try:
+            docs = self.db.collection(self.collection_name) \
+                .order_by("indexed_at", direction=firestore.Query.DESCENDING) \
+                .limit(250) \
+                .stream()
+
+            scored = []
+            for doc in docs:
+                data = doc.to_dict() or {}
+                vid = self._normalize_original_video_id(data.get('original_video_id', data.get('video_id')))
+                if focus_norm and vid != focus_norm:
+                    continue
+
+                haystack = " ".join([
+                    str(data.get('title', '')).lower(),
+                    str(data.get('description', '')).lower(),
+                    str(data.get('summary', '')).lower(),
+                    str(data.get('text', '')[:600]).lower()
+                ])
+                score = sum(1 for token in tokens if token in haystack)
+                if score <= 0 and tokens:
+                    continue
+                scored.append((score, data))
+
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+            results = [self._format_search_result(data) for _, data in scored[: max(1, n_results)]]
+            return {'query': query, 'results': results, 'fallback': 'lexical'}
+        except Exception as e:
+            logger.error(f"Lexical search fallback failed: {e}")
             return {'query': query, 'results': [], 'error': str(e)}
 
     def _vector_search(self, collection_ref, query_embedding, limit=10):
@@ -815,8 +991,24 @@ class LibrarianAgent:
 
     def chat(self, query, focus_video_id: Optional[str] = None):
         """RAG Chat Implementation using LangGraph."""
+        if self._is_highlight_inventory_query(query):
+            return self._answer_highlight_inventory(query, focus_video_id=focus_video_id)
+
         if not self.client:
-             return {"answer": "Missing Google API Key.", "sources": []}
+            # Deterministic fallback mode when LLM is unavailable.
+            fallback_search = self.search_history(query, n_results=5, focus_video_id=focus_video_id)
+            results = fallback_search.get('results', [])
+            if not results:
+                return {
+                    "answer": "I could not find matching saved content yet. Save videos/highlights first, then ask again.",
+                    "sources": []
+                }
+            cards = self.build_source_cards_from_results(results, focus_video_id=focus_video_id, limit=3)
+            titles = [c.get("title", "Video") for c in cards[:3]]
+            return {
+                "answer": "I found related saved content: " + ", ".join(titles),
+                "sources": cards
+            }
              
         try:
             # Delegate to LangGraph Workflow

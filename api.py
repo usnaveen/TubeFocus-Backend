@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 
 from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
@@ -854,6 +855,59 @@ def fs_get_sessions():
         return create_error_response(
             APIErrorCodes.INTERNAL_ERROR,
             "Failed to retrieve sessions",
+            500,
+            {'error_details': str(e)}
+        )
+
+@app.route('/firestore/sessions', methods=['POST'])
+def fs_save_session_endpoint():
+    """
+    Save a session snapshot to Firestore.
+    POST /firestore/sessions
+    Body: {
+      "session_id": "...",
+      "goal": "...",
+      "focus_score": 72,
+      "videos_watched": 5,
+      "highlights_count": 3,
+      "watch_time_minutes": 42,
+      "date": "2026-02-18"
+    }
+    """
+    require_api_key()
+    try:
+        from firestore_service import save_session
+
+        data = request.get_json(force=True) or {}
+        session_id = data.get('session_id')
+        if not session_id:
+            return create_error_response(
+                APIErrorCodes.MISSING_REQUIRED_FIELDS,
+                "session_id is required",
+                400,
+                {'missing_field': 'session_id'}
+            )
+
+        session_payload = {
+            'goal': data.get('goal', ''),
+            'focus_score': float(data.get('focus_score', 0) or 0),
+            'videos_watched': int(data.get('videos_watched', 0) or 0),
+            'highlights_count': int(data.get('highlights_count', 0) or 0),
+            'watch_time_minutes': int(data.get('watch_time_minutes', 0) or 0),
+            'date': data.get('date') or datetime.now().strftime('%Y-%m-%d'),
+            'created_at': data.get('created_at') or datetime.now().isoformat()
+        }
+
+        success = save_session(session_id, session_payload)
+        if not success:
+            return jsonify({'success': False, 'message': 'Failed to save session'}), 500
+
+        return jsonify({'success': True, 'session_id': session_id}), 200
+    except Exception as e:
+        logger.error(f"/firestore/sessions POST error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to save session",
             500,
             {'error_details': str(e)}
         )
