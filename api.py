@@ -116,6 +116,14 @@ from google import genai
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "X-API-KEY"])
 
+@app.after_request
+def after_request(response):
+    """Ensure CORS headers are present on all responses, including errors."""
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    return response
+
 # --- Rate Limiter Setup ---
 limiter = Limiter(
     get_remote_address,
