@@ -111,7 +111,7 @@ class LibrarianAgent:
             )
             return result.embeddings[0].values
         except Exception as e:
-            logger.error(f"Embedding generation failed: {e}")
+            logger.error(f"Embedding generation failed: {e}", exc_info=True)
             return None
 
     def _normalize_original_video_id(self, raw_video_id: Optional[str]) -> str:
