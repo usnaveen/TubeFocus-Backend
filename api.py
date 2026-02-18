@@ -814,9 +814,35 @@ def gatekeeper_unblock_channel():
 
 # ===== FIRESTORE ENDPOINTS: Persistent Storage =====
 
-
-
-# ===== FIRESTORE ENDPOINTS: Persistent Storage =====
+@app.route('/firestore/sessions', methods=['GET'])
+def fs_get_sessions():
+    """
+    Get recent sessions from Firestore.
+    GET /firestore/sessions
+    Query params:
+      - limit: max results (default 20)
+    """
+    require_api_key()
+    try:
+        from firestore_service import get_recent_sessions
+        
+        limit = int(request.args.get('limit', 20))
+        sessions = get_recent_sessions(limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'sessions': sessions,
+            'count': len(sessions)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"/firestore/sessions GET error: {e}", exc_info=True)
+        return create_error_response(
+            APIErrorCodes.INTERNAL_ERROR,
+            "Failed to retrieve sessions",
+            500,
+            {'error_details': str(e)}
+        )
 
 @app.route('/highlights', methods=['POST'])
 def save_highlight():
@@ -1181,11 +1207,14 @@ def librarian_get_saved_videos():
     require_api_key()
     try:
         librarian = get_librarian_agent()
+        if not librarian:
+             return jsonify({'success': True, 'videos': []}), 200
+
         videos = librarian.get_saved_videos(limit=50)
         return jsonify({'success': True, 'videos': videos}), 200
     except Exception as e:
         logger.error(f"/librarian/saved_videos error: {e}", exc_info=True)
-        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Get saved videos failed", 500, {'error': str(e)})
+        return jsonify({'success': False, 'videos': [], 'error': str(e)}), 200
 
 @app.route('/librarian/get_highlights', methods=['GET'])
 def librarian_get_highlights():
@@ -1196,11 +1225,16 @@ def librarian_get_highlights():
     require_api_key()
     try:
         librarian = get_librarian_agent()
+        if not librarian:
+            # If librarian fails to init (e.g. no Firestore), return empty list instead of crashing
+            return jsonify({'success': True, 'highlights': []}), 200
+            
         highlights = librarian.get_all_highlights(limit=50)
         return jsonify({'success': True, 'highlights': highlights}), 200
     except Exception as e:
         logger.error(f"/librarian/get_highlights error: {e}", exc_info=True)
-        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Get highlights failed", 500, {'error': str(e)})
+        # return empty list on error to prevent frontend crash
+        return jsonify({'success': False, 'highlights': [], 'error': str(e)}), 200
 
 @app.route('/librarian/summaries', methods=['GET'])
 def librarian_get_saved_summaries():
@@ -1211,11 +1245,14 @@ def librarian_get_saved_summaries():
     require_api_key()
     try:
         librarian = get_librarian_agent()
+        if not librarian:
+             return jsonify({'success': True, 'summaries': []}), 200
+
         summaries = librarian.get_saved_summaries(limit=50)
         return jsonify({'success': True, 'summaries': summaries}), 200
     except Exception as e:
         logger.error(f"/librarian/summaries error: {e}", exc_info=True)
-        return create_error_response(APIErrorCodes.INTERNAL_ERROR, "Get summaries failed", 500, {'error': str(e)})
+        return jsonify({'success': False, 'summaries': [], 'error': str(e)}), 200
 
 @app.errorhandler(APIError)
 def handle_api_error(error):
