@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import hashlib
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 from google import genai
@@ -119,10 +120,21 @@ class LibrarianAgent:
             return ""
         for prefix in ("saved_link_", "saved_", "summary_"):
             if video_id.startswith(prefix):
-                return video_id[len(prefix):]
+                video_id = video_id[len(prefix):]
+                break
         if "_highlight_" in video_id:
-            return video_id.split("_highlight_", 1)[0]
-        return video_id
+            video_id = video_id.split("_highlight_", 1)[0]
+        return self._extract_youtube_id(video_id)
+
+    def _extract_youtube_id(self, raw_value: str) -> str:
+        value = (raw_value or "").strip()
+        if not value:
+            return ""
+        if "youtube.com" in value or "youtu.be" in value:
+            match = re.search(r'(?:v=|/)([0-9A-Za-z_-]{11})', value)
+            if match:
+                return match.group(1)
+        return value
 
     def _youtube_urls(self, video_id: str, fallback_url: str = "") -> Dict[str, str]:
         normalized_id = self._normalize_original_video_id(video_id)
@@ -461,6 +473,16 @@ class LibrarianAgent:
                         segments=segments  # Pass segments for hierarchical chunking
                     )
                     if success:
+                        # Add a metadata-only chunk so title/description queries can match.
+                        self._index_metadata_chunk(
+                            storage_video_id,
+                            title=title,
+                            description=description,
+                            goal=user_goal,
+                            score=score,
+                            video_url=video_url,
+                            original_video_id=video_id
+                        )
                         return {"success": True, "save_mode": "transcript"}
                     logger.warning(f"Transcript indexing failed for {video_id}; storing metadata-only fallback.")
 
@@ -511,7 +533,6 @@ class LibrarianAgent:
                 "total_chunks": 1,
                 "indexed_at": datetime.now().isoformat(),
                 "text": rich_text,
-                "embedding": Vector(embedding),
                 "type": "saved_video",
                 "save_mode": "link_only",
                 "manual_save": True,
@@ -591,6 +612,7 @@ class LibrarianAgent:
             for doc in docs:
                 data = doc.to_dict()
                 original_video_id = data.get('original_video_id') or data.get('video_id', '')
+                original_video_id = self._normalize_original_video_id(original_video_id)
                 if not original_video_id:
                     continue
 
@@ -641,7 +663,8 @@ class LibrarianAgent:
                     if not is_saved_candidate:
                         continue
 
-                    original_video_id = data.get('original_video_id') or self._normalize_original_video_id(raw_video_id)
+                    original_video_id = data.get('original_video_id') or raw_video_id
+                    original_video_id = self._normalize_original_video_id(original_video_id)
                     if not original_video_id or original_video_id in by_video:
                         continue
 
@@ -672,6 +695,44 @@ class LibrarianAgent:
         except Exception as e:
             logger.error(f"Failed to get saved videos: {e}")
             return []
+
+    def _index_metadata_chunk(self, storage_video_id: str, title: str, description: str, goal: str, score: float, video_url: str, original_video_id: str):
+        """Index a metadata-only chunk so title/description queries can match."""
+        if not self.db:
+            return
+        meta_text = " ".join([t for t in [title, description, f"Goal: {goal}"] if t]).strip()
+        if not meta_text:
+            return
+        doc_id = f"{storage_video_id}_meta"
+        doc_ref = self.db.collection(self.collection_name).document(doc_id)
+        doc_data = {
+            "video_id": storage_video_id,
+            "original_video_id": original_video_id,
+            "title": title,
+            "goal": goal,
+            "score": float(score),
+            "chunk_index": 0,
+            "total_chunks": 1,
+            "indexed_at": datetime.now().isoformat(),
+            "text": meta_text,
+            "type": "video_meta",
+            "tier": 1,
+            "description": description,
+            "video_url": video_url
+        }
+        if self.client:
+            embedding = self._get_embedding(meta_text)
+            if embedding:
+                doc_data["embedding"] = Vector(embedding)
+            else:
+                doc_data["embedding_missing"] = True
+        else:
+            doc_data["embedding_missing"] = True
+        try:
+            doc_ref.set(doc_data)
+            self._source_card_cache.invalidate(original_video_id)
+        except Exception as e:
+            logger.warning(f"Metadata chunk indexing failed for {storage_video_id}: {e}")
 
     def get_saved_summaries(self, limit=50):
         """Retrieve generated video summaries."""
@@ -726,6 +787,49 @@ class LibrarianAgent:
         highlight_terms = ("highlight", "highlights", "note", "notes")
         inventory_terms = ("do i have", "how many", "show", "list", "any", "what are")
         return any(term in text for term in highlight_terms) and any(term in text for term in inventory_terms)
+
+    def _is_saved_video_inventory_query(self, query: str) -> bool:
+        text = (query or "").lower()
+        inventory_terms = ("do i have", "how many", "show", "list", "any", "what are", "is there")
+        library_terms = ("saved video", "saved videos", "library", "in my library", "in my saved", "saved")
+        return any(term in text for term in inventory_terms) and any(term in text for term in library_terms)
+
+    def _answer_saved_video_inventory(self, query: str) -> Dict:
+        videos = self.get_saved_videos(limit=120)
+        if not videos:
+            return {"answer": "You do not have any saved videos yet.", "sources": []}
+
+        text = (query or "").lower()
+        raw_tokens = [t for t in text.replace("'", " ").split() if len(t) > 2]
+        stop = {"the", "and", "for", "with", "from", "that", "this", "have", "any", "video", "videos", "saved", "library", "in", "my", "there", "is", "are", "do", "i", "by", "about"}
+        tokens = [t for t in raw_tokens if t not in stop]
+
+        scored = []
+        for v in videos:
+            hay = " ".join([str(v.get("title", "")).lower(), str(v.get("description", "")).lower()])
+            score = sum(1 for t in tokens if t in hay)
+            if score > 0 or not tokens:
+                scored.append((score, v))
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        if tokens:
+            matches = [video for score, video in scored if score > 0]
+        else:
+            matches = [video for _, video in scored]
+
+        if not matches:
+            return {"answer": "I could not find matching saved videos yet.", "sources": []}
+
+        top = matches[:3]
+        lines = [f"Yes — I found {len(matches)} saved video(s) that match:"]
+        for v in top:
+            cue = v.get("description") or v.get("note") or ""
+            cue_text = f" — {cue[:80]}" if cue else ""
+            lines.append(f"- {v.get('title', 'Untitled')}{cue_text}")
+
+        seed_results = [{"video_id": v.get("video_id"), "title": v.get("title")} for v in top if v.get("video_id")]
+        cards = self.build_source_cards_from_results(seed_results, limit=3)
+        return {"answer": "\n".join(lines), "sources": cards}
 
     def _answer_highlight_inventory(self, query: str, focus_video_id: Optional[str] = None) -> Dict:
         highlights = self.get_all_highlights(limit=120)
@@ -857,6 +961,12 @@ class LibrarianAgent:
                             pass  # Parent expansion is best-effort
                 formatted_results = expanded_results
             
+            # Optional lexical supplement to catch title/description matches.
+            lexical = self._lexical_search_history(query, n_results=n_results, focus_video_id=focus_video_id)
+            lexical_results = lexical.get('results', [])
+            if lexical_results:
+                formatted_results.extend(lexical_results)
+
             # Deduplicate by snippet content
             seen_snippets = set()
             deduped = []
@@ -867,11 +977,12 @@ class LibrarianAgent:
                     deduped.append(r)
             formatted_results = deduped[:n_results * 2]  # Allow extra for richness
                 
+            if not formatted_results:
+                fallback = self._lexical_search_history(query, n_results=n_results, focus_video_id=focus_video_id)
+                return fallback
+
             logger.info(f"Multi-tier search for '{query}' returned {len(formatted_results)} results")
-            return {
-                'query': query,
-                'results': formatted_results
-            }
+            return {'query': query, 'results': formatted_results}
             
         except Exception as e:
             logger.error(f"Search failed: {str(e)}")
@@ -993,6 +1104,8 @@ class LibrarianAgent:
         """RAG Chat Implementation using LangGraph."""
         if self._is_highlight_inventory_query(query):
             return self._answer_highlight_inventory(query, focus_video_id=focus_video_id)
+        if self._is_saved_video_inventory_query(query):
+            return self._answer_saved_video_inventory(query)
 
         if not self.client:
             # Deterministic fallback mode when LLM is unavailable.
