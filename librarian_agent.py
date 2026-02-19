@@ -691,9 +691,59 @@ class LibrarianAgent:
                     if len(by_video) >= limit:
                         break
 
+            # Final fallback: recover pseudo-saved videos from highlights.
+            if not by_video:
+                recovered = self._recover_saved_videos_from_highlights(limit=limit)
+                for item in recovered:
+                    by_video[item["video_id"]] = item
+
             return list(by_video.values())
         except Exception as e:
             logger.error(f"Failed to get saved videos: {e}")
+            return []
+
+    def _recover_saved_videos_from_highlights(self, limit=50):
+        """
+        Build a pseudo saved-videos list from highlights when explicit saved cards are absent.
+        This keeps dashboard and chat inventory answers aligned.
+        """
+        if not self.db:
+            return []
+
+        try:
+            highlights = self.get_all_highlights(limit=max(limit * 10, 120))
+            by_video = {}
+            for h in highlights:
+                raw_id = h.get("video_id")
+                original_video_id = self._normalize_original_video_id(raw_id)
+                if not original_video_id or original_video_id in by_video:
+                    continue
+
+                video_url = h.get("video_url")
+                if not video_url and original_video_id:
+                    video_url = f"https://youtube.com/watch?v={original_video_id}"
+                urls = self._youtube_urls(original_video_id, fallback_url=video_url or "")
+
+                by_video[original_video_id] = {
+                    "video_id": original_video_id,
+                    "stored_video_id": f"highlight_{original_video_id}",
+                    "title": h.get("video_title") or h.get("title") or f"Video {original_video_id}",
+                    "goal": None,
+                    "score": None,
+                    "indexed_at": h.get("created_at") or "",
+                    "save_mode": "from_highlights",
+                    "description": "Recovered from highlights",
+                    "video_url": urls["watch_url"],
+                    "embed_url": urls["embed_url"],
+                    "thumbnail_url": urls["thumbnail_url"],
+                    "note": h.get("note", "")
+                }
+                if len(by_video) >= limit:
+                    break
+
+            return list(by_video.values())
+        except Exception as e:
+            logger.error(f"Failed to recover saved videos from highlights: {e}")
             return []
 
     def _index_metadata_chunk(self, storage_video_id: str, title: str, description: str, goal: str, score: float, video_url: str, original_video_id: str):
