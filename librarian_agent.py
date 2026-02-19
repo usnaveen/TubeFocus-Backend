@@ -206,8 +206,8 @@ class LibrarianAgent:
                             summary_doc = data
 
                 text = (data.get("text") or "").strip()
-                if text and len(snippets) < 4:
-                    snippets.append(text[:240])
+                if text and len(snippets) < 12:
+                    snippets.append(text[:500])
         except Exception as e:
             logger.warning(f"Context card query failed for {normalized_id}: {e}")
 
@@ -924,7 +924,7 @@ class LibrarianAgent:
 
         scored = []
         for v in videos:
-            hay = " ".join([str(v.get("title", "")).lower(), str(v.get("description", "")).lower()])
+            hay = " ".join([str(v.get("title", "")).lower(), str(v.get("description", "")).lower(), str(v.get("note", "")).lower()])
             score = sum(1 for t in tokens if t in hay)
             if score > 0 or not tokens:
                 scored.append((score, v))
@@ -1114,17 +1114,57 @@ class LibrarianAgent:
             formatted_results = []
             
             if focus_video_id:
-                # ── FOCUSED MODE: Skip Phase 1, search only within this video ──
+                # ── FOCUSED MODE: Directly fetch chunks for this video from Firestore ──
                 logger.info(f"Focused retrieval on video: {focus_video_id}")
-                focused_results = self._vector_search(
-                    collection_ref, query_embedding, limit=n_results * 2
-                )
-                for data in focused_results:
-                    vid = self._normalize_original_video_id(
-                        data.get('original_video_id', data.get('video_id'))
+                focus_norm = self._normalize_original_video_id(focus_video_id)
+
+                # Strategy A: Direct Firestore query for this video's chunks (guaranteed to find them)
+                try:
+                    direct_docs = collection_ref \
+                        .where(filter=firestore.FieldFilter("original_video_id", "==", focus_norm)) \
+                        .limit(50) \
+                        .stream()
+                    for doc in direct_docs:
+                        data = doc.to_dict() or {}
+                        text = (data.get("text") or "").strip()
+                        if text:
+                            formatted_results.append(self._format_search_result(data))
+                except Exception as e:
+                    logger.warning(f"Direct focused query failed: {e}")
+
+                # Also try with "saved_" prefixed video_id for older entries
+                if not formatted_results:
+                    try:
+                        saved_id = f"saved_{focus_norm}"
+                        alt_docs = collection_ref \
+                            .where(filter=firestore.FieldFilter("video_id", "==", saved_id)) \
+                            .limit(40) \
+                            .stream()
+                        for doc in alt_docs:
+                            data = doc.to_dict() or {}
+                            text = (data.get("text") or "").strip()
+                            if text:
+                                formatted_results.append(self._format_search_result(data))
+                    except Exception as e:
+                        logger.warning(f"Alt focused query failed: {e}")
+
+                # Strategy B: Also do vector search and filter for this video (catches semantic relevance)
+                try:
+                    focused_results = self._vector_search(
+                        collection_ref, query_embedding, limit=n_results * 3
                     )
-                    if vid == focus_video_id or data.get('video_id', '').endswith(focus_video_id):
-                        formatted_results.append(self._format_search_result(data))
+                    seen_snippets_focused = {r.get('snippet', '')[:80] for r in formatted_results}
+                    for data in focused_results:
+                        vid = self._normalize_original_video_id(
+                            data.get('original_video_id', data.get('video_id'))
+                        )
+                        if vid == focus_norm or data.get('video_id', '').endswith(focus_norm):
+                            result = self._format_search_result(data)
+                            if result.get('snippet', '')[:80] not in seen_snippets_focused:
+                                seen_snippets_focused.add(result.get('snippet', '')[:80])
+                                formatted_results.append(result)
+                except Exception as e:
+                    logger.warning(f"Vector focused search supplement failed: {e}")
             else:
                 # ── Phase 1: Broad retrieval (Tier 1 + 2) ──
                 phase1_results = self._vector_search(

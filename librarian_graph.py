@@ -47,6 +47,18 @@ class LibrarianGraph:
             focus_video_id=focus_video_id,
             limit=4
         )
+
+        # If a video is focused, ALWAYS ensure its source card is included
+        if focus_video_id:
+            focus_norm = self.agent._normalize_original_video_id(focus_video_id)
+            has_focus_card = any(
+                self.agent._normalize_original_video_id(c.get("video_id")) == focus_norm
+                for c in source_cards
+            )
+            if not has_focus_card:
+                focus_card = self.agent.get_video_context_card(focus_norm)
+                source_cards.insert(0, focus_card)
+
         saved_videos = self.agent.get_saved_videos(limit=80)
         inventory_highlights = self.agent.get_all_highlights(limit=120)
 
@@ -91,10 +103,17 @@ class LibrarianGraph:
         else:
             context_str = "No semantic match found from saved embeddings."
 
-        # Format source cards with rich highlight content
+        # Format source cards with rich highlight content AND transcript snippets
         if sources:
             enriched_context_lines = []
             for source in sources:
+                # Include transcript snippets from the video's chunks
+                snippets = source.get("snippets", [])
+                snippets_text = ""
+                if snippets:
+                    snippets_text = "\n  ".join([f"- {s}" for s in snippets[:10]])
+                    snippets_text = f"\n  Transcript Excerpts:\n  {snippets_text}"
+
                 highlights = source.get("highlights", [])
                 highlight_parts = []
                 for h in highlights[:6]:
@@ -115,7 +134,8 @@ class LibrarianGraph:
                 enriched_context_lines.append(
                     f"Video Card: {source.get('title', 'Untitled')}\n"
                     f"  Description: {source.get('description', '')}\n"
-                    f"  Summary: {source.get('summary', '')}\n"
+                    f"  Summary: {source.get('summary', '')}"
+                    f"{snippets_text}\n"
                     f"  Highlights:\n    {highlights_text}"
                 )
             enriched_context = "\n\n".join(enriched_context_lines)
@@ -187,6 +207,10 @@ You have access to the user's saved library context below. Use it to answer thei
 - Never claim "no saved videos" if Saved Videos Inventory has items.
 - Include highlight time ranges when referencing specific moments.
 - Keep responses concise and practical.
+- **Format your response using Markdown**:
+    - Use **bold** for key concepts and terms.
+    - Use bullet points for lists.
+    - Use `### Headers` to organize sections if the answer is long.
 
 ## Highlight Queries
 - The Inventory Highlights section contains BOTH user notes AND actual transcript content for each highlight.
