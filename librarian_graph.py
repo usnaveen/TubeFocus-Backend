@@ -14,6 +14,8 @@ class LibrarianState(TypedDict):
     query: str
     focus_video_id: str
     context_docs: List[Dict]
+    saved_videos: List[Dict]
+    inventory_highlights: List[Dict]
     answer: str
     sources: List[Dict]
 
@@ -43,14 +45,31 @@ class LibrarianGraph:
             focus_video_id=focus_video_id,
             limit=4
         )
+        saved_videos = self.agent.get_saved_videos(limit=80)
+        inventory_highlights = self.agent.get_all_highlights(limit=120)
 
-        return {"context_docs": docs, "sources": source_cards}
+        if focus_video_id:
+            focus_norm = self.agent._normalize_original_video_id(focus_video_id)
+            inventory_highlights = [
+                h for h in inventory_highlights
+                if self.agent._normalize_original_video_id(h.get("video_id")) == focus_norm
+            ]
+
+        return {
+            "context_docs": docs,
+            "sources": source_cards,
+            "saved_videos": saved_videos[:30],
+            "inventory_highlights": inventory_highlights[:30],
+        }
 
     def _generate(self, state: LibrarianState):
         """Generate answer using RAG."""
         query = state['query']
         docs = state['context_docs']
         sources = state.get('sources', [])
+        focus_video_id = state.get("focus_video_id") or ""
+        saved_videos = state.get("saved_videos", [])
+        inventory_highlights = state.get("inventory_highlights", [])
         
         # Format Context with tier and timestamp info
         if docs:
@@ -84,24 +103,55 @@ class LibrarianGraph:
         else:
             enriched_context = "No video cards were built."
 
+        if saved_videos:
+            inventory_lines = []
+            for video in saved_videos[:30]:
+                inventory_lines.append(
+                    f"- {video.get('title', 'Untitled')} | id: {video.get('video_id', '')} "
+                    f"| description: {video.get('description', '')}"
+                )
+            inventory_context = "\n".join(inventory_lines)
+        else:
+            inventory_context = "No saved videos were retrieved."
+
+        if inventory_highlights:
+            highlight_lines = []
+            for h in inventory_highlights[:30]:
+                video_title = h.get("video_title") or h.get("title") or "Untitled"
+                label = h.get("range_label") or ""
+                note = h.get("note") or h.get("transcript") or ""
+                highlight_lines.append(f"- {video_title} [{label}] {note}".strip())
+            highlights_context = "\n".join(highlight_lines)
+        else:
+            highlights_context = "No highlights were retrieved."
+
         # Prompt
         system_msg = """You are the TubeFocus Librarian.
 
 Use only the user's saved library context.
 - Answer the user's question directly first (1-3 sentences), then add short evidence bullets.
 - If a focused video is present, prioritize that video unless the context clearly points elsewhere.
+- For inventory/list/count questions, use the Saved Videos Inventory and Inventory Highlights sections.
+- Never claim "no saved videos" if Saved Videos Inventory has items.
 - Use available title, summary, snippets, and highlights. Include highlight time ranges when relevant.
 - Make a best-effort grounded answer from partial context; do not default to "not enough information" when useful clues exist.
 - If truly no relevant context exists, say so clearly and suggest what to save next.
 - Keep responses concise and practical."""
         
         user_msg = f"""Question: {query}
+Focused Video ID: {focus_video_id or "none"}
         
 Context Snippets:
 {context_str}
 
 Video Cards:
 {enriched_context}
+
+Saved Videos Inventory:
+{inventory_context}
+
+Inventory Highlights:
+{highlights_context}
         """
 
         try:
@@ -135,6 +185,8 @@ Video Cards:
             "query": query,
             "focus_video_id": focus_video_id or "",
             "context_docs": [],
+            "saved_videos": [],
+            "inventory_highlights": [],
             "answer": "",
             "sources": []
         }

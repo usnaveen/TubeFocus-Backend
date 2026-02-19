@@ -844,6 +844,74 @@ class LibrarianAgent:
         library_terms = ("saved video", "saved videos", "library", "in my library", "in my saved", "saved")
         return any(term in text for term in inventory_terms) and any(term in text for term in library_terms)
 
+    def _match_tokens(self, text: str) -> List[str]:
+        normalized = re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower())
+        return [t for t in normalized.split() if len(t) > 2]
+
+    def _infer_focus_video_from_query(self, query: str, limit: int = 80) -> Optional[str]:
+        """
+        Infer a likely target video from natural language.
+        Example: "talk about the attention video"
+        """
+        q = (query or "").strip()
+        if not q:
+            return None
+        if self._is_saved_video_inventory_query(q):
+            return None
+
+        videos = self.get_saved_videos(limit=limit)
+        if not videos:
+            return None
+
+        q_tokens = self._match_tokens(q)
+        if not q_tokens:
+            return None
+        q_set = set(q_tokens)
+
+        token_frequency = {}
+        candidate_rows = []
+        for v in videos:
+            title = (v.get("title") or "").strip()
+            if not title:
+                continue
+            title_tokens = [t for t in self._match_tokens(title) if t not in {"video", "tutorial", "course"}]
+            if not title_tokens:
+                continue
+            for t in set(title_tokens):
+                token_frequency[t] = token_frequency.get(t, 0) + 1
+            overlap = [t for t in title_tokens if t in q_set]
+            score = sum(len(t) for t in overlap)
+            if score > 0:
+                candidate_rows.append(
+                    {
+                        "score": score,
+                        "video_id": v.get("video_id"),
+                        "overlap": overlap,
+                    }
+                )
+
+        if not candidate_rows:
+            return None
+
+        candidate_rows.sort(key=lambda item: item["score"], reverse=True)
+        top = candidate_rows[0]
+        top_score = top["score"]
+        top_video = top["video_id"]
+        second_score = candidate_rows[1]["score"] if len(candidate_rows) > 1 else 0
+
+        # Require a clear signal to avoid accidental focus selection.
+        if top_score >= 7 and (top_score - second_score >= 2):
+            return top_video
+
+        # Short-token fallback (e.g., "git video"): only if a single overlap token
+        # maps uniquely to one saved video title.
+        if "video" in q_set and len(top["overlap"]) == 1:
+            token = top["overlap"][0]
+            if token_frequency.get(token, 0) == 1 and len(token) >= 3:
+                return top_video
+
+        return None
+
     def _answer_saved_video_inventory(self, query: str) -> Dict:
         videos = self.get_saved_videos(limit=120)
         if not videos:
@@ -933,6 +1001,8 @@ class LibrarianAgent:
             "no relevant saved context",
             "save videos with detailed descriptions",
             "i could not find matching saved content",
+            "i don't have any saved videos",
+            "i do not have any saved videos",
         )
         return any(p in text for p in weak_patterns)
 
@@ -1250,31 +1320,16 @@ class LibrarianAgent:
 
     def chat(self, query, focus_video_id: Optional[str] = None):
         """RAG Chat Implementation using LangGraph."""
-        if self._is_highlight_inventory_query(query):
-            return self._answer_highlight_inventory(query, focus_video_id=focus_video_id)
-        if self._is_saved_video_inventory_query(query):
-            return self._answer_saved_video_inventory(query)
+        inferred_focus = None
+        effective_focus_video_id = focus_video_id
+        if not effective_focus_video_id:
+            inferred_focus = self._infer_focus_video_from_query(query)
+            effective_focus_video_id = inferred_focus
 
-        if not self.client:
-            # Deterministic fallback mode when LLM is unavailable.
-            fallback_search = self.search_history(query, n_results=5, focus_video_id=focus_video_id)
-            results = fallback_search.get('results', [])
-            cards = self.build_source_cards_from_results(results, focus_video_id=focus_video_id, limit=3)
-            if not results and not cards:
-                return {
-                    "answer": "I could not find matching saved content yet. Save videos/highlights first, then ask again.",
-                    "sources": []
-                }
-            answer = self._build_grounded_answer_from_context(query, cards, results, focus_video_id=focus_video_id)
-            return {
-                "answer": answer,
-                "sources": cards
-            }
-             
         try:
-            # Delegate to LangGraph Workflow
+            # Always use the LLM generation flow.
             graph = LibrarianGraph(self)
-            result = graph.invoke(query, focus_video_id=focus_video_id)
+            result = graph.invoke(query, focus_video_id=effective_focus_video_id)
 
             # Deduplicate sources
             if 'sources' in result:
@@ -1286,22 +1341,24 @@ class LibrarianAgent:
                     unique_sources[key] = source
                 result['sources'] = list(unique_sources.values())
 
-            # If the LLM returns a weak generic answer, provide grounded extractive fallback.
-            if self._looks_like_non_answer(result.get("answer", "")):
-                fallback_search = self.search_history(query, n_results=6, focus_video_id=focus_video_id)
-                fallback_results = fallback_search.get("results", [])
-                if fallback_results or result.get("sources"):
-                    result["answer"] = self._build_grounded_answer_from_context(
-                        query,
-                        result.get("sources", []),
-                        fallback_results,
-                        focus_video_id=focus_video_id
-                    )
+            result["meta"] = {
+                "used_llm": True,
+                "focus_video_id": effective_focus_video_id,
+                "inferred_focus": bool(inferred_focus)
+            }
 
             return result
         except Exception as e:
             logger.error(f"Chat failed: {e}")
-            return {"answer": "Error processing chat via LangGraph.", "sources": []}
+            return {
+                "answer": "Error processing chat via LangGraph.",
+                "sources": [],
+                "meta": {
+                    "used_llm": False,
+                    "focus_video_id": effective_focus_video_id,
+                    "inferred_focus": bool(inferred_focus)
+                }
+            }
 
     # ── Chunking Strategies ─────────────────────────────────────────────
 
