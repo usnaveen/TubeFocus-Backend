@@ -1,8 +1,8 @@
-from typing import TypedDict, List, Dict
+from typing import TypedDict, List, Dict, Optional
 import logging
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from config import Config
 
 # Setup logging
@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class LibrarianState(TypedDict):
     query: str
     focus_video_id: str
+    chat_history: List[Dict]
+    attached_highlight: Optional[Dict]
     context_docs: List[Dict]
     saved_videos: List[Dict]
     inventory_highlights: List[Dict]
@@ -34,7 +36,7 @@ class LibrarianGraph:
         query = state['query']
         focus_video_id = state.get('focus_video_id') or ""
         logger.info(f"LangGraph Retrieve: {query} (focus: {focus_video_id or 'none'})")
-        
+
         # Multi-tier retrieval: passes focus_video_id for optimized search
         search_res = self.agent.search_history(
             query, n_results=8, focus_video_id=focus_video_id or None
@@ -70,7 +72,9 @@ class LibrarianGraph:
         focus_video_id = state.get("focus_video_id") or ""
         saved_videos = state.get("saved_videos", [])
         inventory_highlights = state.get("inventory_highlights", [])
-        
+        chat_history = state.get("chat_history") or []
+        attached_highlight = state.get("attached_highlight")
+
         # Format Context with tier and timestamp info
         if docs:
             context_lines = []
@@ -87,60 +91,133 @@ class LibrarianGraph:
         else:
             context_str = "No semantic match found from saved embeddings."
 
+        # Format source cards with rich highlight content
         if sources:
             enriched_context_lines = []
             for source in sources:
                 highlights = source.get("highlights", [])
-                highlights_text = "; ".join([
-                    f"{h.get('range_label', '')}: {h.get('note', '') or h.get('transcript', '')}".strip(": ")
-                    for h in highlights[:4]
-                ])
+                highlight_parts = []
+                for h in highlights[:6]:
+                    rl = h.get('range_label', '')
+                    note = (h.get('note') or '').strip()
+                    transcript = (h.get('transcript') or '').strip()
+                    parts = []
+                    if rl:
+                        parts.append(f"[{rl}]")
+                    if note:
+                        parts.append(f'Note: "{note}"')
+                    if transcript:
+                        parts.append(f"Content: {transcript[:300]}")
+                    elif note:
+                        pass  # note already included
+                    highlight_parts.append(" ".join(parts))
+                highlights_text = "\n    ".join(highlight_parts) if highlight_parts else "None"
                 enriched_context_lines.append(
-                    f"Video Card: {source.get('title', 'Untitled')} | Description: {source.get('description', '')} "
-                    f"| Summary: {source.get('summary', '')} | Highlights: {highlights_text}"
+                    f"Video Card: {source.get('title', 'Untitled')}\n"
+                    f"  Description: {source.get('description', '')}\n"
+                    f"  Summary: {source.get('summary', '')}\n"
+                    f"  Highlights:\n    {highlights_text}"
                 )
-            enriched_context = "\n".join(enriched_context_lines)
+            enriched_context = "\n\n".join(enriched_context_lines)
         else:
             enriched_context = "No video cards were built."
 
+        # Format saved videos with content preview
         if saved_videos:
             inventory_lines = []
             for video in saved_videos[:30]:
-                inventory_lines.append(
+                line = (
                     f"- {video.get('title', 'Untitled')} | id: {video.get('video_id', '')} "
                     f"| description: {video.get('description', '')}"
                 )
+                # Include summary/content preview if available from source card
+                summary = video.get('summary', '')
+                if summary:
+                    line += f" | summary: {summary[:200]}"
+                inventory_lines.append(line)
             inventory_context = "\n".join(inventory_lines)
         else:
             inventory_context = "No saved videos were retrieved."
 
+        # Format highlights with BOTH note AND transcript content
         if inventory_highlights:
             highlight_lines = []
             for h in inventory_highlights[:30]:
                 video_title = h.get("video_title") or h.get("title") or "Untitled"
                 label = h.get("range_label") or ""
-                note = h.get("note") or h.get("transcript") or ""
-                highlight_lines.append(f"- {video_title} [{label}] {note}".strip())
+                note = (h.get("note") or "").strip()
+                transcript = (h.get("transcript") or "").strip()
+                created_at = h.get("created_at") or ""
+
+                line = f"- {video_title} [{label}]"
+                if created_at:
+                    line += f" (created: {created_at[:16]})"
+                if note:
+                    line += f'\n  Note: "{note}"'
+                if transcript:
+                    line += f"\n  Transcript content: {transcript[:300]}"
+                elif not note:
+                    line += "\n  (no note or transcript)"
+                highlight_lines.append(line)
             highlights_context = "\n".join(highlight_lines)
         else:
             highlights_context = "No highlights were retrieved."
 
-        # Prompt
-        system_msg = """You are the TubeFocus Librarian.
+        # Format attached highlight (when user clicks/drags a highlight into chat)
+        attached_context = ""
+        if attached_highlight:
+            ah = attached_highlight
+            attached_context = (
+                f"\n\nAttached Highlight (the user is asking specifically about this highlight):\n"
+                f"  Video: {ah.get('video_title', 'Unknown')}\n"
+                f"  Time Range: {ah.get('range_label', 'Unknown')}\n"
+                f"  User Note: {ah.get('note', '(none)')}\n"
+                f"  Transcript Content: {ah.get('transcript', '(no transcript available)')}\n"
+            )
 
-Use only the user's saved library context.
-- Answer the user's question directly first (1-3 sentences), then add short evidence bullets.
+        # System Prompt
+        system_msg = """You are the TubeFocus Librarian — an AI assistant that helps users recall and understand their saved YouTube video content and highlights.
+
+You have access to the user's saved library context below. Use it to answer their questions.
+
+## Core Rules
+- Answer the user's question directly first (1-3 sentences), then add short evidence bullets if helpful.
 - If a focused video is present, prioritize that video unless the context clearly points elsewhere.
 - For inventory/list/count questions, use the Saved Videos Inventory and Inventory Highlights sections.
 - Never claim "no saved videos" if Saved Videos Inventory has items.
-- Use available title, summary, snippets, and highlights. Include highlight time ranges when relevant.
-- Make a best-effort grounded answer from partial context; do not default to "not enough information" when useful clues exist.
+- Include highlight time ranges when referencing specific moments.
+- Keep responses concise and practical.
+
+## Highlight Queries
+- The Inventory Highlights section contains BOTH user notes AND actual transcript content for each highlight.
+- When asked "what are my highlights" or "summarize my highlights", synthesize ALL highlights into a coherent summary grouped by video.
+- When asked "what was my recent/last highlight about", look at the most recent entries (sorted by creation date) and describe their transcript content.
+- When an Attached Highlight is present, the user is asking about THAT specific highlight — analyze its transcript content in depth.
+
+## Grounding
+- Make a best-effort grounded answer from partial context. Do NOT default to "I don't have enough context" or "I need more information" when ANY relevant data exists in the provided sections.
+- Use available titles, summaries, snippets, transcript content, and highlight notes.
 - If truly no relevant context exists, say so clearly and suggest what to save next.
-- Keep responses concise and practical."""
-        
+
+## Conversation History
+- Previous messages in this conversation are provided. Use them for continuity (e.g., "tell me more", "what else", references to prior answers)."""
+
+        # Build messages array
+        messages = [SystemMessage(content=system_msg)]
+
+        # Add conversation history
+        for msg in chat_history[-6:]:  # Last 6 turns (3 user + 3 assistant)
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(AIMessage(content=content))
+
+        # Current user message with full context
         user_msg = f"""Question: {query}
 Focused Video ID: {focus_video_id or "none"}
-        
+{attached_context}
 Context Snippets:
 {context_str}
 
@@ -152,13 +229,12 @@ Saved Videos Inventory:
 
 Inventory Highlights:
 {highlights_context}
-        """
+"""
+
+        messages.append(HumanMessage(content=user_msg))
 
         try:
-            response = self.model.invoke([
-                SystemMessage(content=system_msg),
-                HumanMessage(content=user_msg)
-            ])
+            response = self.model.invoke(messages)
             return {"answer": response.content, "sources": sources}
         except Exception as e:
             logger.error(f"Generation failed: {e}")
@@ -179,11 +255,13 @@ Inventory Highlights:
 
         return workflow.compile()
 
-    def invoke(self, query: str, focus_video_id: str = ""):
+    def invoke(self, query: str, focus_video_id: str = "", chat_history: List[Dict] = None, attached_highlight: Dict = None):
         """Entry point for the graph."""
         inputs = {
             "query": query,
             "focus_video_id": focus_video_id or "",
+            "chat_history": chat_history or [],
+            "attached_highlight": attached_highlight,
             "context_docs": [],
             "saved_videos": [],
             "inventory_highlights": [],

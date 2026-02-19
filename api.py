@@ -670,14 +670,21 @@ def librarian_chat():
     """
     Librarian Agent endpoint - RAG Chat.
     POST /librarian/chat
-    Body: { "query": "...", "focus_video_id": "..." (optional) }
+    Body: {
+        "query": "...",
+        "focus_video_id": "..." (optional),
+        "chat_history": [{"role": "user"|"assistant", "content": "..."}] (optional),
+        "attached_highlight": {"video_id": "...", "video_title": "...", "range_label": "...", "note": "...", "transcript": "..."} (optional)
+    }
     """
     require_api_key()
     try:
         data = request.get_json(force=True)
         query = data.get('query')
         focus_video_id = data.get('focus_video_id')
-        
+        chat_history = data.get('chat_history') or []
+        attached_highlight = data.get('attached_highlight')
+
         if not query:
             return create_error_response(
                 APIErrorCodes.MISSING_REQUIRED_FIELDS,
@@ -685,10 +692,15 @@ def librarian_chat():
                 400,
                 {'missing_field': 'query'}
             )
-            
+
         librarian = get_librarian_agent()
-        response = librarian.chat(query, focus_video_id=focus_video_id)
-        
+        response = librarian.chat(
+            query,
+            focus_video_id=focus_video_id,
+            chat_history=chat_history,
+            attached_highlight=attached_highlight
+        )
+
         return jsonify({
             'success': True,
             'response': response

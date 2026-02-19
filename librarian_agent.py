@@ -1318,18 +1318,27 @@ class LibrarianAgent:
         if not self.db: return {'status': 'disconnected'}
         return {'status': 'connected', 'backend': 'firestore'}
 
-    def chat(self, query, focus_video_id: Optional[str] = None):
+    def chat(self, query, focus_video_id: Optional[str] = None, chat_history: list = None, attached_highlight: dict = None):
         """RAG Chat Implementation using LangGraph."""
         inferred_focus = None
         effective_focus_video_id = focus_video_id
         if not effective_focus_video_id:
-            inferred_focus = self._infer_focus_video_from_query(query)
-            effective_focus_video_id = inferred_focus
+            # If an attached highlight has a video_id, use that as focus
+            if attached_highlight and attached_highlight.get('video_id'):
+                effective_focus_video_id = attached_highlight['video_id']
+            else:
+                inferred_focus = self._infer_focus_video_from_query(query)
+                effective_focus_video_id = inferred_focus
 
         try:
             # Always use the LLM generation flow.
             graph = LibrarianGraph(self)
-            result = graph.invoke(query, focus_video_id=effective_focus_video_id)
+            result = graph.invoke(
+                query,
+                focus_video_id=effective_focus_video_id,
+                chat_history=chat_history or [],
+                attached_highlight=attached_highlight
+            )
 
             # Deduplicate sources
             if 'sources' in result:
