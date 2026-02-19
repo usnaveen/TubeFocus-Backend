@@ -88,9 +88,11 @@ class LibrarianGraph:
         system_msg = """You are the TubeFocus Librarian.
 
 Use only the user's saved library context.
-- If the user asks for a specific saved video, identify the best matching source card.
-- If available, include: title, description cue, summary, and key highlights.
-- If there is no relevant saved context, say that clearly and suggest how to save videos better.
+- Answer the user's question directly first (1-3 sentences), then add short evidence bullets.
+- If a focused video is present, prioritize that video unless the context clearly points elsewhere.
+- Use available title, summary, snippets, and highlights. Include highlight time ranges when relevant.
+- Make a best-effort grounded answer from partial context; do not default to "not enough information" when useful clues exist.
+- If truly no relevant context exists, say so clearly and suggest what to save next.
 - Keep responses concise and practical."""
         
         user_msg = f"""Question: {query}

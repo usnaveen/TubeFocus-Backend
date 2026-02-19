@@ -921,6 +921,104 @@ class LibrarianAgent:
         cards = self.build_source_cards_from_results(seed_results, focus_video_id=focus_video_id, limit=3)
         return {"answer": answer, "sources": cards}
 
+    def _looks_like_non_answer(self, answer: str) -> bool:
+        text = (answer or "").lower().strip()
+        if not text:
+            return True
+        weak_patterns = (
+            "i don't have enough information",
+            "not enough information",
+            "could not find matching",
+            "couldn't find matching",
+            "no relevant saved context",
+            "save videos with detailed descriptions",
+            "i could not find matching saved content",
+        )
+        return any(p in text for p in weak_patterns)
+
+    def _tokenize_query(self, query: str) -> List[str]:
+        text = (query or "").lower()
+        raw = [t for t in text.replace("'", " ").split() if len(t) > 2]
+        stop = {
+            "the", "and", "for", "with", "from", "that", "this", "have", "any",
+            "video", "videos", "saved", "library", "in", "my", "there", "is",
+            "are", "do", "i", "by", "about", "tell", "show", "what", "which"
+        }
+        return [t for t in raw if t not in stop]
+
+    def _score_text(self, text: str, tokens: List[str]) -> int:
+        hay = (text or "").lower()
+        if not hay:
+            return 0
+        if not tokens:
+            return 1
+        return sum(1 for t in tokens if t in hay)
+
+    def _build_grounded_answer_from_context(self, query: str, sources: List[Dict], results: List[Dict], focus_video_id: Optional[str] = None) -> str:
+        tokens = self._tokenize_query(query)
+        evidence = []
+
+        # Result snippets from retrieval.
+        for r in results or []:
+            title = r.get("title") or "Saved video"
+            snippet = (r.get("snippet") or "").strip()
+            if not snippet:
+                continue
+            score = self._score_text(f"{title} {snippet}", tokens)
+            evidence.append({
+                "score": score,
+                "text": snippet,
+                "line": f"[{title}] {snippet[:180]}"
+            })
+
+        # Source-card summary + highlights.
+        for s in sources or []:
+            title = s.get("title") or "Saved video"
+            summary = (s.get("summary") or "").strip()
+            if summary:
+                score = self._score_text(f"{title} {summary}", tokens)
+                evidence.append({
+                    "score": score,
+                    "text": summary,
+                    "line": f"[{title}] {summary[:180]}"
+                })
+
+            for h in (s.get("highlights") or [])[:8]:
+                note_or_text = (h.get("note") or h.get("transcript") or "").strip()
+                if not note_or_text:
+                    continue
+                range_label = (h.get("range_label") or "").strip()
+                score = self._score_text(f"{title} {range_label} {note_or_text}", tokens)
+                prefix = f"[{title} {range_label}]".strip()
+                evidence.append({
+                    "score": score,
+                    "text": note_or_text,
+                    "line": f"{prefix} {note_or_text[:180]}"
+                })
+
+        if not evidence:
+            return "I found saved videos, but there is not enough detailed context yet to answer that precisely."
+
+        evidence.sort(key=lambda item: item["score"], reverse=True)
+        best = evidence[0]["text"]
+        selected = []
+        seen = set()
+        for item in evidence:
+            line = item["line"]
+            key = line[:90].lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(line)
+            if len(selected) >= 3:
+                break
+
+        direct = best[:220]
+        lines = [f"Based on your saved context: {direct}"]
+        for line in selected:
+            lines.append(f"- {line}")
+        return "\n".join(lines)
+
     def search_history(self, query, n_results=5, goal_filter=None, focus_video_id=None):
         """
         Cascading Multi-Tier Retrieval:
@@ -1161,15 +1259,15 @@ class LibrarianAgent:
             # Deterministic fallback mode when LLM is unavailable.
             fallback_search = self.search_history(query, n_results=5, focus_video_id=focus_video_id)
             results = fallback_search.get('results', [])
-            if not results:
+            cards = self.build_source_cards_from_results(results, focus_video_id=focus_video_id, limit=3)
+            if not results and not cards:
                 return {
                     "answer": "I could not find matching saved content yet. Save videos/highlights first, then ask again.",
                     "sources": []
                 }
-            cards = self.build_source_cards_from_results(results, focus_video_id=focus_video_id, limit=3)
-            titles = [c.get("title", "Video") for c in cards[:3]]
+            answer = self._build_grounded_answer_from_context(query, cards, results, focus_video_id=focus_video_id)
             return {
-                "answer": "I found related saved content: " + ", ".join(titles),
+                "answer": answer,
                 "sources": cards
             }
              
@@ -1187,6 +1285,18 @@ class LibrarianAgent:
                         continue
                     unique_sources[key] = source
                 result['sources'] = list(unique_sources.values())
+
+            # If the LLM returns a weak generic answer, provide grounded extractive fallback.
+            if self._looks_like_non_answer(result.get("answer", "")):
+                fallback_search = self.search_history(query, n_results=6, focus_video_id=focus_video_id)
+                fallback_results = fallback_search.get("results", [])
+                if fallback_results or result.get("sources"):
+                    result["answer"] = self._build_grounded_answer_from_context(
+                        query,
+                        result.get("sources", []),
+                        fallback_results,
+                        focus_video_id=focus_video_id
+                    )
 
             return result
         except Exception as e:
