@@ -366,7 +366,9 @@ class LibrarianAgent:
                     chunk_data["parent_doc_id"] = f"{video_id}_t2_{chunk['parent_index']}"
                 
                 if metadata:
-                    chunk_data.update(metadata)
+                    chunk_meta = metadata.copy()
+                    chunk_meta.pop("type", None)
+                    chunk_data.update(chunk_meta)
                 
                 batch.set(doc_ref, chunk_data)
                 count += 1
@@ -432,7 +434,9 @@ class LibrarianAgent:
                 "embedding": Vector(embedding)
             }
             if metadata:
-                chunk_data.update(metadata)
+                chunk_meta = metadata.copy()
+                chunk_meta.pop("type", None)
+                chunk_data.update(chunk_meta)
             doc_ref.set(chunk_data)
             logger.info(f"Tier 1 summary indexed for {video_id}")
         except Exception as e:
@@ -602,14 +606,24 @@ class LibrarianAgent:
         if not self.db: return []
         
         try:
-            docs = self.db.collection(self.collection_name)\
-                .where(filter=firestore.FieldFilter("type", "==", "saved_video"))\
-                .order_by("indexed_at", direction=firestore.Query.DESCENDING)\
-                .limit(max(limit * 8, 100))\
-                .stream()
+            try:
+                docs = self.db.collection(self.collection_name)\
+                    .where(filter=firestore.FieldFilter("type", "==", "saved_video"))\
+                    .order_by("indexed_at", direction=firestore.Query.DESCENDING)\
+                    .limit(max(limit * 8, 100))\
+                    .stream()
+                doc_list = list(docs)
+            except Exception as inner_e:
+                logger.warning(f"Fallback to memory sort due to index issue: {inner_e}")
+                docs = self.db.collection(self.collection_name)\
+                    .where(filter=firestore.FieldFilter("type", "==", "saved_video"))\
+                    .limit(max(limit * 8, 400))\
+                    .stream()
+                doc_list = list(docs)
+                doc_list.sort(key=lambda d: ((d.to_dict() or {}).get("indexed_at") or ""), reverse=True)
 
             by_video = {}
-            for doc in docs:
+            for doc in doc_list:
                 data = doc.to_dict()
                 original_video_id = data.get('original_video_id') or data.get('video_id', '')
                 original_video_id = self._normalize_original_video_id(original_video_id)
@@ -765,7 +779,7 @@ class LibrarianAgent:
             "total_chunks": 1,
             "indexed_at": datetime.now().isoformat(),
             "text": meta_text,
-            "type": "video_meta",
+            "type": "saved_video",
             "tier": 1,
             "description": description,
             "video_url": video_url
@@ -789,13 +803,24 @@ class LibrarianAgent:
         if not self.db: return []
 
         try:
-            docs = self.db.collection(self.collection_name)\
-                .where(filter=firestore.FieldFilter("type", "==", "video_summary"))\
-                .order_by("indexed_at", direction=firestore.Query.DESCENDING)\
-                .limit(limit)\
-                .stream()
+            try:
+                docs = self.db.collection(self.collection_name)\
+                    .where(filter=firestore.FieldFilter("type", "==", "video_summary"))\
+                    .order_by("indexed_at", direction=firestore.Query.DESCENDING)\
+                    .limit(limit)\
+                    .stream()
+                doc_list = list(docs)
+            except Exception as inner_e:
+                logger.warning(f"Fallback to memory sort for summaries: {inner_e}")
+                docs = self.db.collection(self.collection_name)\
+                    .where(filter=firestore.FieldFilter("type", "==", "video_summary"))\
+                    .limit(limit * 4)\
+                    .stream()
+                doc_list = list(docs)
+                doc_list.sort(key=lambda d: ((d.to_dict() or {}).get("indexed_at") or ""), reverse=True)
+                doc_list = doc_list[:limit]
 
-            return [doc.to_dict() for doc in docs]
+            return [doc.to_dict() for doc in doc_list]
         except Exception as e:
             logger.error(f"Failed to get saved summaries: {e}")
             return []
@@ -822,6 +847,7 @@ class LibrarianAgent:
             highlights = []
             for doc in docs:
                 data = doc.to_dict() or {}
+                data["id"] = doc.id
                 if not data.get("range_label"):
                     start = data.get("timestamp_formatted") or str(data.get("timestamp", ""))
                     end = data.get("end_timestamp_formatted") or str(data.get("end_timestamp", data.get("timestamp", "")))

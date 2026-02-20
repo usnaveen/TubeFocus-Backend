@@ -609,17 +609,32 @@ def librarian_search():
             {'error_details': str(e)}
         )
 
-@app.route('/librarian/video/<video_id>', methods=['GET'])
-def librarian_get_video(video_id):
+@app.route('/librarian/video/<video_id>', methods=['GET', 'DELETE'])
+def librarian_get_or_delete_video(video_id):
     """
-    Get full indexed video by ID.
+    Get or delete full indexed video by ID.
     GET /librarian/video/<video_id>
+    DELETE /librarian/video/<video_id>
     """
     require_api_key()
     try:
         librarian = get_librarian_agent()
-        video = librarian.get_video_by_id(video_id)
         
+        if request.method == 'DELETE':
+            success = librarian.delete_video(video_id)
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': 'Video deleted successfully'
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Video not found or deletion failed'
+                }), 404
+        
+        # GET request
+        video = librarian.get_video_by_id(video_id)
         if video:
             return jsonify({
                 'success': True,
@@ -635,7 +650,7 @@ def librarian_get_video(video_id):
         logger.error(f"/librarian/video error: {e}", exc_info=True)
         return create_error_response(
             APIErrorCodes.INTERNAL_ERROR,
-            "Failed to retrieve video",
+            "Failed to process video request",
             500,
             {'error_details': str(e)}
         )
