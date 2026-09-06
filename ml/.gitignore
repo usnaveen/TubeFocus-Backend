@@ -1,0 +1,7 @@
+artifacts/**
+!artifacts/.gitkeep
+!artifacts/README.md
+**/__pycache__/
+*.pyc
+.venv/
+runs/
