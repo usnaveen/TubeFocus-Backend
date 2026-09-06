@@ -1,0 +1,13 @@
+# TubeFocus ML (Tier A) — train + ONNX export
+# Keep separate from the Flask API requirements.
+setfit>=1.1.0
+sentence-transformers>=3.0.0
+datasets>=2.19.0
+transformers>=4.41.0
+torch>=2.2.0
+onnx>=1.16.0
+onnxruntime>=1.18.0
+optimum[onnxruntime]>=1.21.0
+pydantic>=2.0
+numpy>=1.24.0,<2.0
+scikit-learn>=1.3.0
