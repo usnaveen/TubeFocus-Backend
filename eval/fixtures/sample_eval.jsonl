@@ -1,0 +1,10 @@
+{"id":"ex-001","goal":"learn KV cache for LLM inference interviews","title":"KV Cache Explained for Transformers","description":"Deep dive into key-value caching for autoregressive decoding.","label":1,"gemini_score":88,"split":"test"}
+{"id":"ex-002","goal":"learn KV cache for LLM inference interviews","title":"Top 10 Funny Cat Compilations","description":"Cute cats being cats.","label":0,"gemini_score":5,"split":"test"}
+{"id":"ex-003","goal":"learn KV cache for LLM inference interviews","title":"Attention Is All You Need — paper walkthrough","description":"Transformer architecture and multi-head attention.","label":1,"gemini_score":72,"split":"test"}
+{"id":"ex-004","goal":"learn KV cache for LLM inference interviews","title":"Fortnite Season Highlights","description":"Best plays and builds.","label":0,"gemini_score":3,"split":"test"}
+{"id":"ex-005","goal":"build a Chrome MV3 extension with offscreen documents","title":"Chrome Extension Manifest V3 Offscreen Document Guide","description":"How to use offscreen documents and service workers.","label":1,"gemini_score":91,"split":"test"}
+{"id":"ex-006","goal":"build a Chrome MV3 extension with offscreen documents","title":"Baking Sourdough at Home","description":"Beginner bread tips.","label":0,"gemini_score":4,"split":"test"}
+{"id":"ex-007","goal":"fine-tune MiniLM with SetFit for text classification","title":"SetFit: Efficient Few-Shot Learning with Sentence Transformers","description":"Train classifiers with few labels using SetFit.","label":1,"gemini_score":86,"split":"val"}
+{"id":"ex-008","goal":"fine-tune MiniLM with SetFit for text classification","title":"NBA Finals Game Recap","description":"Sports highlights.","label":0,"gemini_score":2,"split":"val"}
+{"id":"ex-009","goal":"ONNX Runtime WebGPU in the browser","title":"Run Transformers.js with WebGPU and WASM fallback","description":"Client-side inference tips for Chrome extensions.","label":1,"gemini_score":84,"split":"test"}
+{"id":"ex-010","goal":"ONNX Runtime WebGPU in the browser","title":"Travel Vlog: Tokyo Night Markets","description":"Food and neon streets.","label":0,"gemini_score":6,"split":"test"}
